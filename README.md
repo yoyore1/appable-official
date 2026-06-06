@@ -7,8 +7,8 @@ generates a **master build prompt** that the **Appable Builder** (the forked
 Void editor, a separate service) picks up to generate a native iOS app. Also
 sells build power, launch packs, and a course.
 
-This is **Part 1 of 3** (Platform). Part 2 is the Builder (Void fork); Part 3 is
-Growth (clippers, affiliates, admin).
+This is **Part 1 of 3** (Platform). Part 2 is the Builder in [`builder/`](builder/)
+(Void fork + standalone CLI). Part 3 is Growth (clippers, affiliates, admin).
 
 ## Stack
 

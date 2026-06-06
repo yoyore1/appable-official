@@ -81,6 +81,10 @@ out
 # Mock DB persistence (dev only)
 .data/
 
+# Builder subprojects
+builder/**/node_modules/
+builder/**/builds/
+
 # Nuxt.js build / generate output
 .nuxt
 dist

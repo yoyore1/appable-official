@@ -1,0 +1,16 @@
+{
+  "name": "appable-builder-engine",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Appable Builder engine — turns a master build prompt into a native SwiftUI iOS app (Kimi K2.6), fixes build errors, ships via Xcode (Mac) or Codemagic (Windows). Wires into the Void fork's chat UI.",
+  "scripts": {
+    "build:app": "tsx src/cli.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@types/node": "^22.9.0",
+    "tsx": "^4.19.2",
+    "typescript": "^5.6.3"
+  }
+}

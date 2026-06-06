@@ -1,0 +1,146 @@
+/*--------------------------------------------------------------------------------------
+ *  Appable Builder — global chrome overrides (simple / chat-first mode).
+ *  Applied when body has class .appable-chat-first.
+ *--------------------------------------------------------------------------------------*/
+
+/* Brand fonts, bundled locally (Fontshare CDN is blocked by Void's CSP). */
+@font-face {
+	font-family: 'Clash Display';
+	src: url('./fonts/ClashDisplay-600.woff2') format('woff2');
+	font-weight: 600;
+	font-style: normal;
+	font-display: swap;
+}
+@font-face {
+	font-family: 'Clash Display';
+	src: url('./fonts/ClashDisplay-700.woff2') format('woff2');
+	font-weight: 700;
+	font-style: normal;
+	font-display: swap;
+}
+@font-face {
+	font-family: 'Satoshi';
+	src: url('./fonts/Satoshi-400.woff2') format('woff2');
+	font-weight: 400;
+	font-style: normal;
+	font-display: swap;
+}
+@font-face {
+	font-family: 'Satoshi';
+	src: url('./fonts/Satoshi-500.woff2') format('woff2');
+	font-weight: 500;
+	font-style: normal;
+	font-display: swap;
+}
+@font-face {
+	font-family: 'Satoshi';
+	src: url('./fonts/Satoshi-700.woff2') format('woff2');
+	font-weight: 700;
+	font-style: normal;
+	font-display: swap;
+}
+
+.monaco-workbench.appable-chat-first {
+	--vscode-editor-background: #FDFAF4;
+	--vscode-sideBar-background: #FDFAF4;
+	--vscode-sideBar-border: #EFE7DA;
+	--vscode-sideBar-foreground: #2B2624;
+	--vscode-panel-background: #FFF8F3;
+	--vscode-panel-border: #EFE7DA;
+	--vscode-activityBar-background: #FFF8F3;
+	--vscode-activityBar-foreground: #2B2624;
+	--vscode-titleBar-activeBackground: #FFF8F3;
+	--vscode-titleBar-inactiveBackground: #FFF8F3;
+	--vscode-titleBar-activeForeground: #2B2624;
+	--vscode-statusBar-background: #FFF0EB;
+	--vscode-statusBar-foreground: #2B2624;
+	--vscode-statusBar-border: #EFE7DA;
+	--vscode-foreground: #2B2624;
+	--vscode-focusBorder: #FF7A63;
+	--vscode-button-background: #FF7A63;
+	--vscode-button-hoverBackground: #E8543B;
+	--vscode-button-foreground: #FFFFFF;
+	--vscode-input-background: #FFFFFF;
+	--vscode-input-border: #EFE7DA;
+	--vscode-dropdown-background: #FFFFFF;
+	--vscode-list-hoverBackground: #FFF3EE;
+	--vscode-list-activeSelectionBackground: #FFE8E2;
+	--vscode-editorGroup-border: #EFE7DA;
+	--vscode-editorGroupHeader-tabsBackground: #FFF8F3;
+	--vscode-tab-activeBackground: #FDFAF4;
+	--vscode-tab-inactiveBackground: #FFF8F3;
+	--vscode-menu-background: #FDFAF4;
+	--vscode-menu-foreground: #2B2624;
+	--vscode-menubar-selectionBackground: #FFE8E2;
+}
+
+/* Editor / preview area — warm cream, not Void dark. Force across the whole part. */
+.monaco-workbench.appable-chat-first .part.editor,
+.monaco-workbench.appable-chat-first .part.editor > .content,
+.monaco-workbench.appable-chat-first .part.editor > .content .editor-group-container,
+.monaco-workbench.appable-chat-first .part.editor .editor-group-container.empty,
+.monaco-workbench.appable-chat-first .part.editor .editor-group-watermark {
+	background-color: #FDFAF4 !important;
+}
+
+/* Hide the leftover Void cube/letterpress (also hidden inline in TS, belt + suspenders) */
+.monaco-workbench.appable-chat-first .editor-group-watermark > .letterpress {
+	display: none !important;
+}
+
+/* On-brand preview placeholder rendered in editorGroupWatermark.ts */
+.monaco-workbench .appable-watermark {
+	position: absolute;
+	top: 50%;
+	left: 50%;
+	transform: translate(-50%, -50%);
+	text-align: center;
+	pointer-events: none;
+	user-select: none;
+	max-width: 80%;
+}
+.monaco-workbench .appable-watermark-title {
+	font-family: 'Clash Display', 'Satoshi', system-ui, sans-serif;
+	font-weight: 700;
+	font-size: 18px;
+	letter-spacing: -0.3px;
+	color: #2B2624;
+	opacity: 0.85;
+}
+.monaco-workbench .appable-watermark-sub {
+	margin-top: 8px;
+	font-family: 'Satoshi', system-ui, sans-serif;
+	font-size: 13.5px;
+	color: #8A817B;
+}
+
+/* Hide the right auxiliary bar + left activity bar entirely in simple mode.
+   Hiding via CSS too (not just layout) kills the startup flash. */
+.monaco-workbench.appable-chat-first .part.auxiliarybar,
+.monaco-workbench.appable-chat-first .part.activitybar {
+	display: none !important;
+}
+
+/* Whole-window cream from first paint so there's no Void-dark flash on load */
+.monaco-workbench.appable-chat-first,
+.monaco-workbench.appable-chat-first .monaco-workbench,
+.monaco-workbench.appable-chat-first .part.editor,
+.monaco-workbench.appable-chat-first .part.sidebar,
+.monaco-workbench.appable-chat-first .part.basepanel {
+	background-color: #FDFAF4 !important;
+}
+
+.monaco-workbench.appable-chat-first .part.titlebar,
+.monaco-workbench.appable-chat-first .part.titlebar .titlebar-container,
+.monaco-workbench.appable-chat-first .part.statusbar {
+	background-color: #FFF8F3 !important;
+	color: #2B2624 !important;
+	border-color: #EFE7DA !important;
+}
+
+/* Title bar text/icons charcoal so the menu (File/Edit/…) reads on cream */
+.monaco-workbench.appable-chat-first .part.titlebar .menubar .menubar-menu-button,
+.monaco-workbench.appable-chat-first .part.titlebar .window-title,
+.monaco-workbench.appable-chat-first .part.titlebar .codicon {
+	color: #2B2624 !important;
+}

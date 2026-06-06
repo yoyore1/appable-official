@@ -1,0 +1,100 @@
+/*--------------------------------------------------------------------------------------
+ *  Appable Builder — shared types + service interface (renderer ⇄ main).
+ *  The engine runs in electron-main (needs node fs/child_process); the browser
+ *  talks to it over the 'void-channel-appable' IPC channel.
+ *--------------------------------------------------------------------------------------*/
+
+import { Event } from '../../../../base/common/event.js';
+import { createDecorator } from '../../../../platform/instantiation/common/instantiation.js';
+
+export type Vibe = 'Cinematic' | 'Minimal' | 'Bold' | 'Soft' | 'Luxury';
+
+export interface MasterBuildPrompt {
+	appName: string;
+	description: string;
+	audience: string;
+	features: string[];
+	vibe: Vibe;
+	colors: string;
+	screens: string[];
+}
+
+export type BuildMode = 'base' | 'full';
+export type ShipPath = 'mac' | 'windows';
+
+export interface BuildOptions {
+	projectId: string;
+	mode: BuildMode;
+	email?: string;
+	password?: string;
+	/** If provided (e.g. from the in-Builder 5-question interview), the engine uses
+	 *  this plan directly instead of fetching it from the platform by projectId. */
+	masterPrompt?: MasterBuildPrompt;
+}
+
+/** One turn in the GPT-style assistant chat. */
+export interface ChatMessage {
+	role: 'user' | 'assistant' | 'system';
+	content: string;
+}
+
+export interface ChatRequest {
+	messages: ChatMessage[];
+	/** Optional current app plan, so the assistant can give app-specific help. */
+	masterPrompt?: MasterBuildPrompt;
+}
+
+export interface ChatResponse {
+	reply: string;
+	/** Which model answered ('kimi' when the live model is configured, else 'offline'). */
+	model: string;
+}
+
+/** The 5-question interview answers, collected in the Builder when the user
+ *  hasn't already done the interview on the web. */
+export interface InterviewAnswers {
+	idea: string;
+	audience: string;
+	features: string;
+	name: string;
+	colors: string;
+}
+
+/** A friendly progress update. `detail` lines are only shown in advanced view. */
+export interface ProgressEvent {
+	kind: 'heading' | 'step' | 'ok' | 'fixing' | 'detail' | 'celebrate' | 'error';
+	message: string;
+	/** 0–100 build completion; drives the persistent progress bar in the UI. */
+	percent?: number;
+}
+
+export interface BuildResult {
+	appName: string;
+	bundleId: string;
+	mode: BuildMode;
+	projectDir: string;
+	fileCount: number;
+	rounds: number;
+	compiled: boolean;
+	usage: { build: number; review: number };
+	shipPath: ShipPath;
+	codemagicYaml?: string;
+}
+
+export const APPABLE_CHANNEL = 'void-channel-appable';
+
+export interface IAppableBuilderService {
+	readonly _serviceBrand: undefined;
+	/** Friendly progress stream for the chat UI. */
+	readonly onProgress: Event<ProgressEvent>;
+	/** Run the full Phase-1 build loop for a project. */
+	build(opts: BuildOptions): Promise<BuildResult>;
+	/** GPT-style assistant chat (Kimi) — talk through and improve the app. */
+	chat(req: ChatRequest): Promise<ChatResponse>;
+	/** Turn the 5-question interview answers into a structured build plan (Kimi). */
+	generatePlan(answers: InterviewAnswers): Promise<MasterBuildPrompt>;
+	/** Fetch a saved plan from the platform by project ID (for the “I already have a plan” flow). */
+	fetchPlan(projectId: string): Promise<MasterBuildPrompt>;
+}
+
+export const IAppableBuilderService = createDecorator<IAppableBuilderService>('appableBuilderService');
