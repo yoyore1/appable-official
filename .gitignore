@@ -78,6 +78,9 @@ web_modules/
 .next
 out
 
+# Mock DB persistence (dev only)
+.data/
+
 # Nuxt.js build / generate output
 .nuxt
 dist

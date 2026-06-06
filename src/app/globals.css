@@ -1,0 +1,152 @@
+/* Characterful display + refined body — exactly the design-system pairing.
+   Loaded from Fontshare so we avoid every banned generic font. */
+@import url("https://api.fontshare.com/v2/css?f[]=clash-display@600,700&f[]=satoshi@400,500,700&display=swap");
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    /* RGB triplets so Tailwind alpha (/ <alpha-value>) works */
+    --cream: 253 250 244;        /* warm off-white base, never stark white */
+    --sand: 247 240 230;         /* slightly deeper card cream */
+    --coral: 255 122 99;         /* the single dominant brand color */
+    --coral-soft: 255 168 150;
+    --coral-deep: 232 90 70;
+    --peach: 255 209 178;
+    --charcoal: 43 38 36;        /* soft charcoal, not pure black */
+    --charcoal-soft: 92 83 79;
+    --moss: 86 162 116;          /* calm green, completion only */
+    --warmgrey: 138 128 122;
+    --line: 232 222 211;         /* soft warm border */
+  }
+
+  .dark {
+    --cream: 26 23 22;
+    --sand: 36 31 30;
+    --coral: 255 132 110;
+    --coral-soft: 214 110 92;
+    --coral-deep: 255 160 142;
+    --peach: 120 84 70;
+    --charcoal: 245 238 232;
+    --charcoal-soft: 198 188 182;
+    --moss: 120 196 150;
+    --warmgrey: 158 148 142;
+    --line: 58 50 47;
+  }
+
+  html {
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+
+  body {
+    @apply bg-cream text-charcoal font-body antialiased;
+    font-feature-settings: "ss01", "cv01";
+  }
+
+  h1, h2, h3, h4, h5 {
+    @apply font-display tracking-tight;
+  }
+
+  ::selection {
+    background: rgb(var(--coral) / 0.25);
+  }
+}
+
+@layer components {
+  /* ---- Signature breathing coral gradient mesh ---------------------------- */
+  .mesh {
+    position: fixed;
+    inset: -20%;
+    z-index: -2;
+    pointer-events: none;
+    background:
+      radial-gradient(40% 40% at 20% 18%, rgb(var(--coral) / 0.55), transparent 60%),
+      radial-gradient(45% 45% at 82% 22%, rgb(var(--peach) / 0.6), transparent 62%),
+      radial-gradient(50% 50% at 60% 85%, rgb(var(--coral-soft) / 0.45), transparent 60%);
+    filter: blur(40px) saturate(115%);
+    animation: breathe 16s ease-in-out infinite;
+  }
+  /* Dialed WAY back on interiors so they stay calm to work in. */
+  .mesh--calm {
+    opacity: 0.4;
+    filter: blur(70px) saturate(105%);
+  }
+
+  /* ---- Faint grain overlay for tactility --------------------------------- */
+  .grain::after {
+    content: "";
+    position: fixed;
+    inset: 0;
+    z-index: -1;
+    pointer-events: none;
+    opacity: 0.5;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.035'/%3E%3C/svg%3E");
+  }
+
+  /* ---- Cards: rounded, floating, diffuse shadow, frosted over the mesh ---- */
+  .card {
+    @apply rounded-3xl bg-cream/80 shadow-soft backdrop-blur-md;
+    border: 1px solid rgb(var(--line) / 0.7);
+  }
+  .card-float {
+    @apply rounded-3xl bg-cream/85 shadow-float backdrop-blur-md;
+    border: 1px solid rgb(var(--line) / 0.6);
+  }
+
+  /* ---- Buttons ----------------------------------------------------------- */
+  .btn {
+    @apply inline-flex items-center justify-center gap-2 rounded-2xl px-5 py-3
+           font-medium transition-all duration-200 select-none;
+  }
+  .btn-primary {
+    @apply btn bg-coral text-white shadow-soft hover:shadow-float
+           hover:-translate-y-0.5 active:translate-y-0;
+  }
+  .btn-secondary {
+    @apply btn bg-cream text-charcoal hover:-translate-y-0.5;
+    border: 1px solid rgb(var(--line));
+  }
+  .btn-ghost {
+    @apply btn text-charcoal-soft hover:text-charcoal hover:bg-sand/60;
+  }
+  .btn-pill {
+    @apply btn rounded-full px-6 py-3.5 text-base;
+  }
+
+  /* ---- Inputs ------------------------------------------------------------ */
+  .input {
+    @apply w-full rounded-2xl bg-cream px-4 py-3 text-charcoal shadow-inset
+           outline-none transition placeholder:text-warmgrey
+           focus:ring-2 focus:ring-coral/40;
+    border: 1px solid rgb(var(--line));
+  }
+
+  /* ---- Soft option pill (vibe picker) ------------------------------------ */
+  .pill {
+    @apply rounded-full px-5 py-2.5 text-sm font-medium transition-all
+           cursor-pointer select-none bg-cream;
+    border: 1px solid rgb(var(--line));
+  }
+  .pill[data-selected="true"] {
+    @apply bg-coral text-white border-transparent shadow-soft;
+  }
+
+  .label {
+    @apply text-xs font-medium uppercase tracking-wide text-warmgrey;
+  }
+}
+
+@layer utilities {
+  /* Staggered fade-up reveals (one orchestrated entrance) */
+  .reveal { animation: fade-up 0.6s cubic-bezier(0.22, 1, 0.36, 1) both; }
+  .reveal-1 { animation-delay: 0.05s; }
+  .reveal-2 { animation-delay: 0.12s; }
+  .reveal-3 { animation-delay: 0.2s; }
+  .reveal-4 { animation-delay: 0.3s; }
+  .reveal-5 { animation-delay: 0.42s; }
+
+  .text-balance { text-wrap: balance; }
+}
