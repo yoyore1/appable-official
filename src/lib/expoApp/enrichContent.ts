@@ -4,9 +4,17 @@ import { attachGenericDetail, itemHasContentDetail } from "./genericDetails";
 import { imageForCategory, onboardingImage } from "./images";
 import { attachRecipeDetail, itemHasRecipeDetail } from "./recipeDetails";
 import { enrichOnboardingSlides } from "./enrichOnboarding";
-import { defaultProfileStats, defaultSettingsRows } from "./smartInteractions";
+import {
+  defaultProfileStats,
+  defaultSettingsRows,
+  ensureLegalSettingsRows,
+} from "./smartInteractions";
 import { buildAppBlueprint } from "./smartBlueprint";
-import type { MasterBuildPrompt } from "@/lib/types";
+import type { InterviewTurn, MasterBuildPrompt } from "@/lib/types";
+import { collectActionPlanGaps } from "./actionPlanSeed";
+import { enforceProductShape } from "./enforceProductShape";
+import { flowFromSpec, inferProductSpec } from "./productSpec";
+import { collectTopologyGaps } from "./enforceProductShape";
 import type { ExpoAppModelInput, ExpoListItem } from "./types";
 
 function safeUrl(url: string | undefined, index: number, category: string): string {
@@ -48,7 +56,7 @@ function collectContentTitles(input: ExpoAppModelInput): string[] {
     for (const it of sec.items) titles.push(it.title);
   }
   for (const [tabId, screen] of Object.entries(input.tabScreens)) {
-    if (/recipe|workout|discover|shop|task|lesson/i.test(`${tabId} ${screen.title}`)) {
+    if (/recipe|workout|discover|shop|task|lesson|walk|message/i.test(`${tabId} ${screen.title}`)) {
       for (const it of screen.items) titles.push(it.title);
     }
   }
@@ -121,10 +129,11 @@ function personalizeCopy(
         input.profile.stats?.length >= 3
           ? input.profile.stats
           : defaultProfileStats(blueprint.category),
-      settings:
+      settings: ensureLegalSettingsRows(
         input.profile.settings?.length >= 4
           ? input.profile.settings
-          : defaultSettingsRows(blueprint.category),
+          : defaultSettingsRows(blueprint.category)
+      ),
     },
   };
 }
@@ -157,11 +166,12 @@ function attachContentDetail(
  */
 export function enrichExpoContent(
   input: ExpoAppModelInput,
-  mp: MasterBuildPrompt
+  mp: MasterBuildPrompt,
+  interview: InterviewTurn[] = []
 ): ExpoAppModelInput {
-  const plan = buildFeaturePlan(mp);
-  const blueprint = buildAppBlueprint(mp);
-  const cap = inferAppCapabilities(mp);
+  const plan = buildFeaturePlan(mp, interview);
+  const blueprint = buildAppBlueprint(mp, interview);
+  const cap = inferAppCapabilities(mp, interview);
   const category = plan.category;
 
   let next = normalizeImages(input, category);
@@ -203,8 +213,12 @@ export function enrichExpoContent(
     if (!isCollection) detailIdx += screen.items.length;
   }
 
-  return {
+  const spec = inferProductSpec(mp, interview);
+  const flow = next.flow?.roles?.length ? next.flow : flowFromSpec(spec);
+
+  const enriched: ExpoAppModelInput = {
     ...next,
+    flow: flow ?? next.flow,
     category: plan.category === "cooking" ? "cooking" : plan.category,
     home: {
       ...next.home,
@@ -218,6 +232,8 @@ export function enrichExpoContent(
     },
     tabScreens,
   };
+
+  return enforceProductShape(enriched, mp, interview);
 }
 
 export function countRecipeGaps(input: ExpoAppModelInput): number {
@@ -255,10 +271,11 @@ function collectDetailGaps(
 /** Remaining content gaps after enrich — any app type, fed into one refine pass. */
 export function collectEnrichGaps(
   input: ExpoAppModelInput,
-  mp: MasterBuildPrompt
+  mp: MasterBuildPrompt,
+  interview: InterviewTurn[] = []
 ): string[] {
-  const plan = buildFeaturePlan(mp);
-  const blueprint = buildAppBlueprint(mp);
+  const plan = buildFeaturePlan(mp, interview);
+  const blueprint = buildAppBlueprint(mp, interview);
   const issues: string[] = [];
 
   for (const sec of input.home.sections) {
@@ -268,5 +285,7 @@ export function collectEnrichGaps(
     if (isCollectionTab(tabId, screen.title, blueprint.collectionTabId)) continue;
     collectDetailGaps(screen.items, `Tab "${tabId}"`, plan.category, issues);
   }
+  issues.push(...collectTopologyGaps(input, mp, interview));
+  issues.push(...collectActionPlanGaps(input, mp));
   return issues;
 }

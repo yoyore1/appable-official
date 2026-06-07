@@ -2,6 +2,8 @@
  * DeepInfra OpenAI-compatible + inference HTTP clients.
  * One API key (DEEPINFRA_API_KEY) powers vision, images, STT, TTS, embeddings, rerank.
  */
+import { trackLlmCost } from "@/lib/aiBillingContext";
+import { parseDeepInfraCost } from "@/lib/deepinfraCost";
 import {
   deepinfra,
   deepinfraKey,
@@ -27,6 +29,12 @@ function authHeaders(k: string, json = true): HeadersInit {
   };
 }
 
+function recordCost(data: unknown): number {
+  const costUsd = parseDeepInfraCost(data);
+  trackLlmCost(costUsd);
+  return costUsd;
+}
+
 export type VisionInput = {
   imageUrl: string;
   prompt?: string;
@@ -34,7 +42,10 @@ export type VisionInput = {
 };
 
 /** Qwen3-VL — photo understanding, OCR (pass image URL or data URI). */
-export async function visionComplete(input: VisionInput): Promise<string> {
+export async function visionComplete(input: VisionInput): Promise<{
+  text: string;
+  costUsd: number;
+}> {
   const k = key();
   if (!k) throw new Error("DEEPINFRA_NOT_CONFIGURED");
 
@@ -66,7 +77,9 @@ export async function visionComplete(input: VisionInput): Promise<string> {
   }
 
   const data = await res.json();
-  return (data?.choices?.[0]?.message?.content ?? "").trim();
+  const costUsd = recordCost(data);
+  const text = (data?.choices?.[0]?.message?.content ?? "").trim();
+  return { text, costUsd };
 }
 
 export type ImageGenInput = {
@@ -78,7 +91,7 @@ export type ImageGenInput = {
 /** FLUX-2-klein-4b — returns base64 JPEG/PNG data URLs. */
 export async function generateImage(
   input: ImageGenInput
-): Promise<{ dataUrl: string; revisedPrompt?: string }[]> {
+): Promise<{ dataUrl: string; revisedPrompt?: string; costUsd: number }[]> {
   const k = key();
   if (!k) throw new Error("DEEPINFRA_NOT_CONFIGURED");
 
@@ -99,12 +112,14 @@ export async function generateImage(
   }
 
   const data = await res.json();
+  const costUsd = recordCost(data);
   const items = (data?.data ?? []) as { b64_json?: string; revised_prompt?: string }[];
   return items
     .filter((d) => d.b64_json)
     .map((d) => ({
       dataUrl: `data:image/png;base64,${d.b64_json}`,
       revisedPrompt: d.revised_prompt,
+      costUsd,
     }));
 }
 
@@ -116,7 +131,10 @@ export type TranscribeInput = {
 };
 
 /** Whisper large v3 turbo — multipart transcription. */
-export async function transcribeAudio(input: TranscribeInput): Promise<string> {
+export async function transcribeAudio(input: TranscribeInput): Promise<{
+  text: string;
+  costUsd: number;
+}> {
   const k = key();
   if (!k) throw new Error("DEEPINFRA_NOT_CONFIGURED");
 
@@ -141,7 +159,8 @@ export async function transcribeAudio(input: TranscribeInput): Promise<string> {
   }
 
   const data = await res.json();
-  return (data?.text ?? "").trim();
+  const costUsd = recordCost(data);
+  return { text: (data?.text ?? "").trim(), costUsd };
 }
 
 /** Qwen3-TTS — DeepInfra inference endpoint (not OpenAI-shaped). */
@@ -149,7 +168,7 @@ export async function synthesizeSpeech(text: string): Promise<{
   audioUrl?: string;
   audioBase64?: string;
   chars: number;
-  costUsd?: number;
+  costUsd: number;
 }> {
   const k = key();
   if (!k) throw new Error("DEEPINFRA_NOT_CONFIGURED");
@@ -167,8 +186,8 @@ export async function synthesizeSpeech(text: string): Promise<{
   }
 
   const data = await res.json();
+  const costUsd = recordCost(data);
   const audio = data?.audio as string | null | undefined;
-  const cost = data?.inference_status?.cost as number | undefined;
 
   if (audio && typeof audio === "string") {
     const dataUrl = audio.startsWith("data:") || audio.startsWith("http")
@@ -178,17 +197,17 @@ export async function synthesizeSpeech(text: string): Promise<{
       audioUrl: dataUrl.startsWith("http") ? dataUrl : undefined,
       audioBase64: dataUrl.startsWith("data:") ? dataUrl : undefined,
       chars: text.length,
-      costUsd: cost,
+      costUsd,
     };
   }
 
-  return { chars: text.length, costUsd: cost };
+  return { chars: text.length, costUsd };
 }
 
 /** Qwen3-Embedding — OpenAI embeddings API. */
 export async function embedText(
   input: string | string[]
-): Promise<number[][]> {
+): Promise<{ embeddings: number[][]; costUsd: number }> {
   const k = key();
   if (!k) throw new Error("DEEPINFRA_NOT_CONFIGURED");
 
@@ -208,15 +227,16 @@ export async function embedText(
   }
 
   const data = await res.json();
+  const costUsd = recordCost(data);
   const rows = (data?.data ?? []) as { embedding: number[] }[];
-  return rows.map((r) => r.embedding);
+  return { embeddings: rows.map((r) => r.embedding), costUsd };
 }
 
 /** Qwen3-Reranker — inference endpoint. */
 export async function rerankDocuments(
   query: string,
   documents: string[]
-): Promise<{ index: number; score: number; text: string }[]> {
+): Promise<{ rankings: { index: number; score: number; text: string }[]; costUsd: number }> {
   const k = key();
   if (!k) throw new Error("DEEPINFRA_NOT_CONFIGURED");
 
@@ -233,8 +253,10 @@ export async function rerankDocuments(
   }
 
   const data = await res.json();
+  const costUsd = recordCost(data);
   const scores = (data?.scores ?? []) as number[];
-  return scores
+  const rankings = scores
     .map((score, index) => ({ index, score, text: documents[index] ?? "" }))
     .sort((a, b) => b.score - a.score);
+  return { rankings, costUsd };
 }

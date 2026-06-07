@@ -99,6 +99,23 @@ export function attachGenericDetail(
     };
   }
 
+  if (category === "pets" || /walk|walker|dog|pet|breed/i.test(item.title + item.subtitle)) {
+    return {
+      ...item,
+      detailType: "article",
+      body:
+        item.body ??
+        `${item.title} — verified walker in your area. ${item.subtitle || "See availability and reviews."}`,
+      steps: item.steps ?? [
+        "Review walker profile & ratings",
+        "Confirm breed, duration & meeting spot",
+        "Message to coordinate details",
+        "Book & pay securely in-app",
+        "Rate after the walk",
+      ],
+    };
+  }
+
   if (!item.body) {
     return {
       ...item,

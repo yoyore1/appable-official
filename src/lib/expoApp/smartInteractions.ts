@@ -72,6 +72,39 @@ function legalDocForSetting(label: string): "privacy" | "terms" | "support" | un
   return undefined;
 }
 
+/** App Store–required docs — always appended to Profile settings if missing. */
+export const REQUIRED_LEGAL_SETTINGS: { label: string; icon: ExpoIconName }[] = [
+  { label: "Privacy Policy", icon: "shield" },
+  { label: "Terms of Service", icon: "book-open" },
+  { label: "Support", icon: "help-circle" },
+];
+
+export function ensureLegalSettingsRows(
+  settings: { label: string; icon: ExpoIconName }[]
+): { label: string; icon: ExpoIconName }[] {
+  const covered = new Set<"privacy" | "terms" | "support">();
+  for (const row of settings) {
+    const doc = legalDocForSetting(row.label);
+    if (doc) covered.add(doc);
+  }
+  const appended = REQUIRED_LEGAL_SETTINGS.filter(
+    (row) => !covered.has(legalDocForSetting(row.label)!)
+  );
+  return appended.length ? [...settings, ...appended] : settings;
+}
+
+export function withLegalSettings<T extends ExpoAppModel>(model: T): T {
+  const settings = ensureLegalSettingsRows(model.profile.settings ?? []);
+  const same =
+    settings.length === model.profile.settings.length &&
+    settings.every((s, i) => s.label === model.profile.settings[i]?.label);
+  if (same) return model;
+  return {
+    ...model,
+    profile: { ...model.profile, settings },
+  };
+}
+
 export function primaryContentTab(model: ExpoAppModel): string | null {
   const hit = model.tabs.find(
     (t) => t.id !== "home" && t.id !== "profile" && model.tabScreens[t.id]
@@ -79,15 +112,63 @@ export function primaryContentTab(model: ExpoAppModel): string | null {
   return hit?.id ?? Object.keys(model.tabScreens)[0] ?? null;
 }
 
+export function filterItemsForRole<T extends { forRole?: string }>(
+  items: T[],
+  roleId: string | null | undefined
+): T[] {
+  if (!roleId) return items;
+  return items.filter((it) => !it.forRole || it.forRole === roleId);
+}
+
+export function resolveHomeForRole(
+  model: ExpoAppModel,
+  roleId: string | null | undefined
+): ExpoAppModel["home"] {
+  const base =
+    roleId && model.homeByRole?.[roleId] ? model.homeByRole[roleId] : model.home;
+  if (!roleId) return base;
+  return {
+    ...base,
+    sections: base.sections.map((sec) => ({
+      ...sec,
+      items: filterItemsForRole(sec.items, roleId),
+    })),
+  };
+}
+
+/** Apply role-specific home + tab item filtering for dual-sided preview. */
+export function applyRoleToModel(
+  model: ExpoAppModel,
+  roleId: string | null | undefined
+): ExpoAppModel {
+  if (!roleId || !model.flow?.roles?.length) return model;
+  return {
+    ...model,
+    home: resolveHomeForRole(model, roleId),
+    tabScreens: Object.fromEntries(
+      Object.entries(model.tabScreens).map(([id, screen]) => [
+        id,
+        { ...screen, items: filterItemsForRole(screen.items, roleId) },
+      ])
+    ),
+  };
+}
+
 export function resolveTabScreen(
   model: ExpoAppModel,
-  tabId: string
+  tabId: string,
+  roleId?: string | null
 ): { screen: ExpoAppModel["tabScreens"][string] | undefined; resolvedId: string } {
   if (tabId === "home" || tabId === "profile") {
     return { screen: undefined, resolvedId: tabId };
   }
   if (model.tabScreens[tabId]) {
-    return { screen: model.tabScreens[tabId], resolvedId: tabId };
+    const screen = model.tabScreens[tabId];
+    if (!roleId) return { screen, resolvedId: tabId };
+    return {
+      screen: { ...screen, items: filterItemsForRole(screen.items, roleId) },
+      resolvedId: tabId,
+    };
   }
   const fuzzy = Object.entries(model.tabScreens).find(
     ([id, screen]) =>
@@ -96,11 +177,22 @@ export function resolveTabScreen(
       tabId.includes(id) ||
       screen.title.toLowerCase().includes(tabId)
   );
-  if (fuzzy) return { screen: fuzzy[1], resolvedId: fuzzy[0] };
+  if (fuzzy) {
+    const screen = fuzzy[1];
+    if (!roleId) return { screen, resolvedId: fuzzy[0] };
+    return {
+      screen: { ...screen, items: filterItemsForRole(screen.items, roleId) },
+      resolvedId: fuzzy[0],
+    };
+  }
   const first = Object.entries(model.tabScreens)[0];
-  return first
-    ? { screen: first[1], resolvedId: first[0] }
-    : { screen: undefined, resolvedId: tabId };
+  if (!first) return { screen: undefined, resolvedId: tabId };
+  const screen = first[1];
+  if (!roleId) return { screen, resolvedId: first[0] };
+  return {
+    screen: { ...screen, items: filterItemsForRole(screen.items, roleId) },
+    resolvedId: first[0],
+  };
 }
 
 function collectionTabId(model: ExpoAppModel): string | null {
@@ -158,6 +250,12 @@ function heroFallbackTab(model: ExpoAppModel, category: AppCategory): string | n
       primaryContentTab(model)
     );
   }
+  if (category === "pets") {
+    return (
+      model.tabs.find((t) => /walk|browse|search/i.test(`${t.id} ${t.label}`))?.id ??
+      primaryContentTab(model)
+    );
+  }
   return primaryContentTab(model);
 }
 
@@ -200,6 +298,11 @@ function describeSetting(
       preference: `Defaults for ${mainTab} and quick capture.`,
       notification: `Due-date alerts and ${mainTab} reminders.`,
     },
+    pets: {
+      safety: `Background checks & safety preferences for ${audience}.`,
+      payment: `Default payment method for walk bookings.`,
+      notification: `Walk requests, messages, and booking updates.`,
+    },
     shopping: {
       notification: `Deal alerts and ${collectionTab ?? "cart"} updates.`,
       preference: `Shipping, sizes, and saved ${mainTab} filters.`,
@@ -222,10 +325,13 @@ function describeSetting(
     return `Alerts for ${mainTab}${collectionTab ? ` and ${collectionTab}` : ""}. Toggle anytime.`;
   }
   if (/privacy|legal|shield|data/.test(l)) {
-    return `How ${app} handles photos, content, and account data.`;
+    return `How ${app} handles photos, content, and account data. Hosted by Appable.`;
+  }
+  if (/terms|service/.test(l)) {
+    return `Terms governing your use of ${app}. Hosted by Appable.`;
   }
   if (/help|support|faq/.test(l)) {
-    return `Help, FAQ, and contact for ${app}.`;
+    return `Help, FAQ, and contact for ${app}. Hosted by Appable.`;
   }
   if (/account|profile|user/.test(l)) {
     return `Your ${app} profile on this device. Cloud sync in the published app.`;

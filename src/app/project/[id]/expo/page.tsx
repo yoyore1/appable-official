@@ -22,7 +22,7 @@ export default async function ExpoBuildPage({ params }: { params: { id: string }
       <Background calm />
       <AppNav user={user} />
       <main
-        className="mx-auto flex max-w-5xl flex-col px-5 py-6"
+        className="mx-auto flex w-full max-w-[min(100%,1680px)] flex-col px-4 py-6 sm:px-6 lg:px-8"
         style={{ height: "calc(100vh - 64px)" }}
       >
         <Link
@@ -34,13 +34,15 @@ export default async function ExpoBuildPage({ params }: { params: { id: string }
         <div className="mb-3">
           <h1 className="text-xl font-semibold">Build {mp.appName} with Expo</h1>
           <p className="text-sm text-charcoal-soft">
-            Confirm your plan, then watch it come alive in the phone preview.
+            Chat on the left, live preview in the center, Expo Go on your phone
+            on the right.
           </p>
         </div>
         <ExpoBuildRoom
           projectId={project.id}
           initialPlan={mp}
           initialModel={project.expoAppModel}
+          interview={project.interview}
         />
       </main>
     </>

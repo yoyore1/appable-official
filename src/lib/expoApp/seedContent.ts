@@ -1,6 +1,9 @@
-import type { MasterBuildPrompt } from "@/lib/types";
+import type { InterviewTurn, MasterBuildPrompt } from "@/lib/types";
 import type { AppCategory } from "./inferCategory";
 import { inferCategory } from "./inferCategory";
+import { inferAppTopology } from "./appTopology";
+import { buildInterviewContext } from "./interviewContext";
+import { flowFromSpec, inferProductSpec } from "./productSpec";
 import { foodImage, imageForCategory, onboardingImage, petImage } from "./images";
 import type { ExpoAppModelInput, ExpoListItem } from "./types";
 
@@ -340,106 +343,212 @@ function productivitySeed(mp: MasterBuildPrompt): ExpoAppModelInput {
   };
 }
 
-function petsSeed(mp: MasterBuildPrompt): ExpoAppModelInput {
-  const f0 = mp.features[0] ?? "Find walks";
+function petsSeed(mp: MasterBuildPrompt, interview: InterviewTurn[] = []): ExpoAppModelInput {
+  const spec = inferProductSpec(mp, interview);
+  const ctx = buildInterviewContext(mp, interview);
+  const topology = inferAppTopology(mp, interview, ctx.appShapes);
+  const f0 = mp.features[0] ?? "Browse open walks";
   const f1 = mp.features[1] ?? "Messages";
+  const ownerPlan = topology.roleTabPlans.find((p) => p.roleId === "owner");
+  const walkerPlan = topology.roleTabPlans.find((p) => p.roleId === "walker");
   const petItem = (
     id: string,
     title: string,
     subtitle: string,
     meta: string,
     imageIndex: number,
-    badge?: string
+    extra?: Partial<ExpoListItem>
   ): ExpoListItem => ({
     id,
     title,
     subtitle,
     meta,
-    badge,
     imageUrl: petImage(imageIndex),
+    detailType: "article",
+    primaryAction: "Accept Walk",
+    ...extra,
   });
+
+  const tabs =
+    topology.tabs.length > 0
+      ? topology.tabs.map(({ id, label, icon }) => ({ id, label, icon }))
+      : [
+          { id: "home", label: "Home", icon: "home" as const },
+          { id: "walks", label: "Walks", icon: "search" as const },
+          { id: "messages", label: "Chat", icon: "bell" as const },
+          { id: "profile", label: "You", icon: "user" as const },
+        ];
 
   return {
     category: "pets",
-    tabs: [
-      { id: "home", label: "Home", icon: "home" },
-      { id: "walks", label: "Walks", icon: "search" },
-      { id: "messages", label: "Chat", icon: "bell" },
-      { id: "profile", label: "You", icon: "user" },
+    flow: flowFromSpec(spec),
+    tabs,
+    onboarding: [
+      {
+        title: "Post a walk in seconds",
+        subtitle:
+          "Enter breed, neighborhood, and budget — verified walkers apply within minutes.",
+        imageUrl: petImage(0),
+        demonstrates: mp.features[0] ?? "Post walk requests",
+        ctaLabel: "See how it works",
+        kind: "feature_demo",
+      },
+      {
+        title: "Message before you book",
+        subtitle: "Chat with walkers, check reviews, and confirm the details.",
+        imageUrl: petImage(1),
+        demonstrates: f1,
+        ctaLabel: "Next",
+        kind: "value_prop",
+      },
+      {
+        title: "You're set",
+        subtitle: `Trusted walks for ${mp.audience.toLowerCase()} — book with confidence.`,
+        imageUrl: petImage(2),
+        demonstrates: "Book & pay securely",
+        ctaLabel: "Find a walker",
+        kind: "completion",
+      },
     ],
-    onboarding: [],
     home: {
-      headline: "Walks near you",
-      subheadline: `Trusted walkers for ${mp.audience.toLowerCase()}.`,
-      heroLabel: "Post a walk request",
-      heroSublabel: "Breed, area & budget — walkers apply in minutes",
+      headline: ownerPlan?.homeHeadline ?? "Walks near you",
+      subheadline:
+        ownerPlan?.homeSubheadline ??
+        `Connect dogs with walkers who love them — built for ${mp.audience.toLowerCase()}.`,
+      heroLabel: ownerPlan?.heroLabel ?? "Post a walk request",
+      heroSublabel:
+        ownerPlan?.heroSublabel ?? "Breed, area & budget — walkers apply in minutes",
       sections: [
         {
-          title: "Open requests nearby",
+          title: "Active walk",
           items: [
-            petItem(
-              "w1",
-              "Golden retriever · 45 min",
-              "Maple St · $22 · 3 walkers applied",
-              "0.4 mi",
-              0,
-              "New"
-            ),
-            petItem(
-              "w2",
-              "Lab mix · morning walk",
-              "Oak Park · $18 · verified walkers only",
-              "0.8 mi",
-              1
-            ),
-            petItem(
-              "w3",
-              "French bulldog · lunch slot",
-              "Downtown · $15 · 2 matches waiting",
-              "1.1 mi",
-              2
-            ),
+            petItem("w-map", "Sarah is walking Buddy", "Live map · ETA 4 min", "In progress", 0, {
+              badge: "Live",
+              tags: ["GPS tracking"],
+              primaryAction: "View map",
+              forRole: "owner",
+            }),
           ],
         },
         {
-          title: "Your upcoming",
+          title: "Open nearby",
           items: [
-            petItem(
-              "u1",
-              "Tomorrow with Sarah M.",
-              "Beagle · 30 min · confirmed",
-              "9:00 AM",
-              3
-            ),
-            petItem(
-              "u2",
-              "Saturday — Alex K.",
-              "Husky · 60 min · pending",
-              "Sat 10am",
-              4
-            ),
+            petItem("w1", "Your post · Buddy", "3 walkers applied", "0.4 mi", 1, {
+              badge: "Applicants",
+              tags: ["Buddy · L"],
+              subtitle: "Maple St · 45 min · morning",
+              primaryAction: "Review applicants",
+              forRole: "owner",
+            }),
           ],
         },
       ],
     },
+    homeByRole: spec.hasDualRoles
+      ? {
+          owner: {
+            headline: ownerPlan?.homeHeadline ?? "Walks near you",
+            subheadline:
+              ownerPlan?.homeSubheadline ?? "Post a request or track an active walk",
+            heroLabel: ownerPlan?.heroLabel ?? "Post a walk request",
+            heroSublabel:
+              ownerPlan?.heroSublabel ?? "Breed, area & pay — walkers apply in minutes",
+            sections: [
+              {
+                title: "Active walk",
+                items: [
+                  petItem("w-map", "Sarah is walking Buddy", "Live map · ETA 4 min", "In progress", 0, {
+                    badge: "Live",
+                    tags: ["GPS tracking"],
+                    primaryAction: "View map",
+                  }),
+                ],
+              },
+              {
+                title: "Applicants",
+                items: [
+                  petItem("w1", "Buddy · Golden Retriever", "3 walkers applied", "0.4 mi", 1, {
+                    badge: "New",
+                    tags: ["Buddy · L"],
+                    subtitle: "Maple St · 45 min",
+                    primaryAction: "Review applicants",
+                  }),
+                ],
+              },
+            ],
+          },
+          walker: {
+            headline: walkerPlan?.homeHeadline ?? "Gigs near you",
+            subheadline:
+              walkerPlan?.homeSubheadline ?? "Browse open walks and manage active jobs",
+            heroLabel: walkerPlan?.heroLabel ?? "Browse open walks",
+            heroSublabel: walkerPlan?.heroSublabel ?? "Apply to requests in your area",
+            sections: [
+              {
+                title: "Open near you",
+                items: [
+                  petItem("g1", "Buddy · Golden Retriever", "$22 · 45 min", "0.4 mi", 2, {
+                    badge: "New",
+                    tags: ["Buddy · L"],
+                    subtitle: "Maple St · morning slot",
+                    primaryAction: "Apply",
+                  }),
+                  petItem("g2", "Luna · Lab mix", "$18 · 30 min", "0.8 mi", 3, {
+                    subtitle: "Oak Park · flexible",
+                    primaryAction: "Apply",
+                  }),
+                ],
+              },
+              {
+                title: "Active job",
+                items: [
+                  petItem("g-active", "Walking Max · Husky", "Timer 18:42 · Crissy Field", "In progress", 4, {
+                    badge: "Active",
+                    primaryAction: "Complete walk",
+                  }),
+                ],
+              },
+            ],
+          },
+        }
+      : undefined,
     tabScreens: {
       walks: {
-        title: "Browse walks",
-        subtitle: f0,
+        title: "Walks",
+        subtitle: "Requests & sessions",
         items: [
-          petItem("b1", "Puppy socialization walk", "Trainer verified · $25", "25 min", 0),
-          petItem("b2", "Senior dog — slow pace", "Gentle walker preferred · $20", "30 min", 1),
-          petItem("b3", "Two-dog household", "Needs experience · $35", "45 min", 2),
-          petItem("b4", "Rainy day indoor drop-in", "Feed + play · $28", "20 min", 3),
+          petItem("b1", "Buddy · Golden Retriever", "Jun 14 · 9:00 AM · 1h walk", "Dolores Park", 0, {
+            tags: ["Buddy · L"],
+            quote: "Buddy loves fetch! Bring a ball if you can.",
+            primaryAction: "Accept Walk",
+            forRole: "walker",
+          }),
+          petItem("b2", "Luna & Mochi", "Jun 14 · 4:00 PM · 45m walk", "Alamo Square", 1, {
+            tags: ["Luna · S", "Mochi · S"],
+            quote: "Both are leash trained.",
+            primaryAction: "Accept Walk",
+            forRole: "walker",
+          }),
+          petItem("m1", "My post · Buddy", "3 applicants · Jun 14", "Pending", 2, {
+            primaryAction: "Review",
+            forRole: "owner",
+          }),
+          petItem("m2", "Saturday with Alex K.", "Accepted · 9:00 AM", "Confirmed", 3, {
+            primaryAction: "Message",
+            forRole: "walker",
+          }),
         ],
       },
       messages: {
-        title: "Messages",
+        title: "Chat",
         subtitle: f1,
         items: [
-          petItem("m1", "Sarah M.", "See you tomorrow at 9!", "Unread", 1),
-          petItem("m2", "Alex K.", "Happy to walk your husky Saturday", "2h ago", 2),
-          petItem("m3", "Jamie L.", "Applied to your Maple St request", "New", 0),
+          petItem("c1", "Sarah M.", "Re: Buddy walk tomorrow", "2 new", 0, {
+            primaryAction: "Reply",
+          }),
+          petItem("c2", "Jamie L.", "Thanks for walking Max!", "Yesterday", 1, {
+            primaryAction: "Reply",
+          }),
         ],
       },
     },
@@ -456,7 +565,7 @@ function petsSeed(mp: MasterBuildPrompt): ExpoAppModelInput {
         { label: "Payment", icon: "settings" },
         { label: "Notifications", icon: "bell" },
         { label: "Safety", icon: "shield" },
-        { label: "Help", icon: "help-circle" },
+        { label: "Help & support", icon: "help-circle" },
       ],
     },
   };
@@ -551,10 +660,13 @@ function generalSeed(mp: MasterBuildPrompt, category: AppCategory): ExpoAppModel
   };
 }
 
-export function seedExpoAppContent(mp: MasterBuildPrompt): ExpoAppModelInput {
-  const category = inferCategory(mp);
+export function seedExpoAppContent(
+  mp: MasterBuildPrompt,
+  interview: InterviewTurn[] = []
+): ExpoAppModelInput {
+  const category = inferCategory(mp, interview);
   if (category === "cooking") return cookingSeed(mp);
-  if (category === "pets") return petsSeed(mp);
+  if (category === "pets") return petsSeed(mp, interview);
   if (category === "fitness") return fitnessSeed(mp);
   if (category === "productivity") return productivitySeed(mp);
   return generalSeed(mp, category);

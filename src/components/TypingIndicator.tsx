@@ -4,12 +4,12 @@ import { useEffect, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 
 const STATUS_LINES = [
-  "Cooking up your next question…",
-  "Sketching this in my head…",
   "Pulling the right words…",
+  "Sketching your app in my head…",
+  "Cooking up something that fits…",
   "Got it — one sec…",
   "Almost there…",
-  "Thinking through your idea…",
+  "Thinking through what you said…",
 ] as const;
 
 /** iMessage-style typing bubble with rotating status microcopy. */

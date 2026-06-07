@@ -4,7 +4,8 @@ import { buildFeaturePlan } from "./featurePlan";
 import { buildPreviewUiConfig } from "./previewFeatures";
 import type { AppCategory } from "./inferCategory";
 import type { ExpoIconName } from "./types";
-import type { MasterBuildPrompt } from "@/lib/types";
+import type { InterviewTurn, MasterBuildPrompt } from "@/lib/types";
+import { buildInterviewContext } from "./interviewContext";
 
 export interface BlueprintTab {
   id: string;
@@ -45,7 +46,7 @@ function tabsForCategory(
     purpose,
   });
 
-  if (category === "cooking" || /recipe|food|cook/.test(blob)) {
+  if (category === "cooking") {
     return [
       pick("home", "Home", "home", "Hero scan + tonight's picks"),
       pick("recipes", "Recipes", "chef-hat", `Full recipes — ${f[0] ?? "browse"}`),
@@ -113,14 +114,46 @@ function tabsForCategory(
 }
 
 /** Zero-token blueprint — tells the LLM exactly how to wow for THIS app. */
-export function buildAppBlueprint(mp: MasterBuildPrompt): AppBlueprint {
-  const plan = buildFeaturePlan(mp);
-  const ui = buildPreviewUiConfig(mp);
-  const cap = inferAppCapabilities(mp);
+export function buildAppBlueprint(
+  mp: MasterBuildPrompt,
+  interview: InterviewTurn[] = []
+): AppBlueprint {
+  const ctx = buildInterviewContext(mp, interview);
+  const plan = buildFeaturePlan(mp, interview);
+  const ui = buildPreviewUiConfig(mp, interview);
+  const cap = inferAppCapabilities(mp, interview);
   const category = plan.category;
-  const blob = [mp.description, mp.audience, mp.twist ?? "", ...mp.features].join(" ");
+  const blob = ctx.transcript;
 
-  const tabs = tabsForCategory(category, mp, blob);
+  let tabs =
+    ctx.topology.hasDualRoles && ctx.topology.tabs.length
+      ? ctx.topology.tabs.map((t) => ({
+          id: t.id,
+          label: t.label,
+          icon: t.icon,
+          purpose: t.purpose,
+        }))
+      : tabsForCategory(category, mp, blob);
+  if (
+    !ctx.topology.hasDualRoles &&
+    category === "pets" &&
+    (ctx.appShapes.includes("local_marketplace") ||
+      ctx.appShapes.includes("live_tracking"))
+  ) {
+    tabs = tabs.map((t) =>
+      t.id === "home"
+        ? {
+            ...t,
+            purpose: "Map strip + nearby pins + post walk CTA",
+          }
+        : t.id === "walks"
+          ? {
+              ...t,
+              purpose: "Browse open walks + active in-progress session",
+            }
+          : t
+    );
+  }
   const collectionTabId =
     ui.collectionTabId ??
     tabs.find((t) => /list|cart|plan|library|shop|task/i.test(`${t.id} ${t.label}`))?.id ??
@@ -136,16 +169,45 @@ export function buildAppBlueprint(mp: MasterBuildPrompt): AppBlueprint {
           : "Profile or home section",
   }));
 
+  const detailBar =
+    category === "cooking"
+      ? "Every card opens REAL detail (body + ingredients + steps for recipes)."
+      : "Every card opens REAL detail (body + domain-appropriate steps — walks, workouts, lessons, etc.).";
+
   const wowBar = [
     `Speak to ${mp.audience} in ${mp.vibe.toLowerCase()} tone — never generic.`,
-    "Every card opens REAL detail (body + steps or ingredients + steps).",
-    "List/collection tab items reference content from other tabs by name.",
+    detailBar,
+    "Collection tab items reference content from other tabs by name when applicable.",
     "Profile stats feel lived-in (not round zeros). Save + collection work in preview.",
-    `Implement: ${mp.features.join(" · ")}`,
+    `User asked for: ${ctx.userStatedFeatures.join(" · ") || mp.features.join(" · ")}`,
+    `Also include: ${ctx.essentialFeatures.filter((e) => !/save favorite|settings/i.test(e)).slice(0, 4).join(" · ")}`,
   ];
 
-  if (cap.capabilities.includes("vision_ai")) {
-    wowBar.push("Home hero = photo/scan → real AI result flow.");
+  if (ctx.signatureFeatures.length > 0) {
+    wowBar.push(
+      `Signature UI (user never asked — must show): ${ctx.signatureFeatures.slice(0, 5).join(" · ")}`
+    );
+  }
+  if (ctx.appShapes.length > 0) {
+    wowBar.push(`App shapes: ${ctx.appShapes.join(", ")}`);
+  }
+  if (ctx.topology.hasDualRoles) {
+    wowBar.push(
+      `Dual-role tabs (same ids, different content per role): ${tabs.map((t) => t.id).join(", ")}`
+    );
+    for (const plan of ctx.topology.roleTabPlans) {
+      wowBar.push(
+        `${plan.roleLabel}: hero "${plan.heroLabel}" — tabs: ${Object.entries(plan.tabPurposes)
+          .map(([k, v]) => `${k}=${v}`)
+          .join("; ")}`
+      );
+    }
+  }
+
+  if (cap.capabilities.includes("vision_ai") && category === "cooking") {
+    wowBar.push("Home hero = photo/scan → recipe result flow.");
+  } else if (cap.capabilities.includes("vision_ai")) {
+    wowBar.push(`Home hero = ${cap.heroAction} (${cap.heroSublabel}).`);
   }
 
   return {
@@ -168,9 +230,15 @@ export function buildAppBlueprint(mp: MasterBuildPrompt): AppBlueprint {
     featureWiring,
     linkingRules: [
       collectionTabId
-        ? `Grocery/list tab "${collectionTabId}" items must name recipes/content from home/recipes tab.`
-        : "Link collection items to home content titles where possible.",
-      "Home section 2 references something from tab 1 (e.g. 'From your last scan').",
+        ? category === "cooking"
+          ? `Lists tab "${collectionTabId}" items must name recipes from home/recipes.`
+          : category === "pets"
+            ? `Saved walkers / upcoming walks in "${collectionTabId}" reference walk requests from Home/Walks.`
+            : `Tab "${collectionTabId}" items reference titles from other tabs by name.`
+        : "Link related items across tabs by title where it makes sense.",
+      category === "pets"
+        ? "Home section 2 shows upcoming walks or recent messages."
+        : "Home section 2 references something from the main content tab.",
     ],
     wowBar,
     onboardingArchetype: inferOnboardingArchetype(mp),

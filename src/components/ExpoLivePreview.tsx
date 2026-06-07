@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import confetti from "canvas-confetti";
 import { motion, AnimatePresence } from "framer-motion";
 import {
@@ -19,6 +19,7 @@ import {
   Shield,
   HelpCircle,
   ChevronRight,
+  Loader2,
   X,
   Check,
   Mic,
@@ -29,9 +30,11 @@ import {
 } from "lucide-react";
 import type {
   ExpoAppCapabilities,
+  ExpoAppFlow,
   ExpoAppModel,
   ExpoIconName,
   ExpoListItem,
+  ExpoUserRole,
 } from "@/lib/expoApp/types";
 import { imageForCategory } from "@/lib/expoApp/images";
 import {
@@ -44,6 +47,7 @@ import {
   uiFeatureEnabled,
 } from "@/lib/expoApp/previewFeatures";
 import {
+  applyRoleToModel,
   buildPreviewInteractionConfig,
   extractCollectionLines,
   isListsTab,
@@ -52,7 +56,14 @@ import {
   sharePayload,
   type SettingBinding,
 } from "@/lib/expoApp/previewInteractions";
+import {
+  applyItemPatches,
+  findTabId,
+  resolveActionOutcome,
+} from "@/lib/expoApp/previewActions";
+import { withLegalSettings } from "@/lib/expoApp/smartInteractions";
 import { recipeListenText } from "@/lib/expoApp/recipeDetails";
+import type { TweakTarget } from "@/lib/expoApp/tweakPaths";
 import { cn } from "@/lib/utils";
 import {
   previewDeviceKind,
@@ -180,18 +191,29 @@ export function ExpoLivePreview({
   startPastOnboarding,
   alive,
   className,
+  editMode,
+  selectedPath,
+  onSelectTarget,
 }: {
   projectId?: string;
   model: ExpoAppModel | null;
   building?: boolean;
   buildPercent?: number;
+  /** Skip onboarding slides only — role + setup still run first when flow.roles exists. */
   startPastOnboarding?: boolean;
   /** Extra motion / glow when build is complete. */
   alive?: boolean;
   className?: string;
+  /** Replit-style tap-to-fix — select elements instead of navigating. */
+  editMode?: boolean;
+  selectedPath?: string | null;
+  onSelectTarget?: (target: TweakTarget) => void;
 }) {
+  type LaunchPhase = "role" | "setup" | "onboarding" | "main";
+  const [launchPhase, setLaunchPhase] = useState<LaunchPhase>("main");
   const [onboardIdx, setOnboardIdx] = useState(0);
   const [onboarded, setOnboarded] = useState(Boolean(startPastOnboarding));
+  const [selectedRole, setSelectedRole] = useState<ExpoUserRole | null>(null);
   const [tab, setTab] = useState(model?.tabs[0]?.id ?? "home");
   const [detail, setDetail] = useState<ExpoListItem | null>(null);
   const [checked, setChecked] = useState<Set<string>>(new Set());
@@ -209,6 +231,17 @@ export function ExpoLivePreview({
   const [displayModel, setDisplayModel] = useState<ExpoAppModel | null>(null);
   const [savedIds, setSavedIds] = useState<Set<string>>(new Set());
   const [extraListItems, setExtraListItems] = useState<ExpoListItem[]>([]);
+  const [itemPatches, setItemPatches] = useState<Record<string, Partial<ExpoListItem>>>(
+    {}
+  );
+  const [injectedByTab, setInjectedByTab] = useState<Record<string, ExpoListItem[]>>(
+    {}
+  );
+  const [compose, setCompose] = useState<{
+    title: string;
+    placeholder: string;
+    sourceItemId: string;
+  } | null>(null);
   const [toast, setToast] = useState<string | null>(null);
   const [settingsRow, setSettingsRow] = useState<string | null>(null);
   const [settingsToggles, setSettingsToggles] = useState<Record<string, boolean>>({});
@@ -220,6 +253,12 @@ export function ExpoLivePreview({
   const recordChunksRef = useRef<Blob[]>([]);
 
   const previewModel = displayModel ?? model;
+  const roleId = selectedRole?.id ?? null;
+  const viewModel = useMemo(() => {
+    if (!previewModel) return null;
+    const roleApplied = applyRoleToModel(previewModel, roleId);
+    return applyItemPatches(roleApplied, itemPatches, injectedByTab);
+  }, [previewModel, roleId, itemPatches, injectedByTab]);
   const theme = previewModel?.theme;
   const showLive =
     previewModel && (!building || (buildPercent ?? 0) >= 55) && imagesReady;
@@ -240,11 +279,43 @@ export function ExpoLivePreview({
   const canAddToCollection = uiFeatureEnabled(caps?.uiFeatures, "add_to_collection");
   const collectionTabId = ix?.collectionTabId ?? "lists";
   const collectionLabel = ix?.collectionActionLabel ?? "Add to collection";
-  const resolvedTab = previewModel ? resolveTabScreen(previewModel, tab) : null;
+  const resolvedTab = viewModel ? resolveTabScreen(viewModel, tab) : null;
 
   useEffect(() => {
     setDeviceKind(previewDeviceKind());
   }, []);
+
+  useEffect(() => {
+    if (!model) return;
+    setSelectedRole(null);
+    setOnboardIdx(0);
+
+    if (model.flow?.roles?.length) {
+      setLaunchPhase("role");
+      setOnboarded(Boolean(startPastOnboarding));
+      return;
+    }
+
+    if (startPastOnboarding) {
+      setLaunchPhase("main");
+      setOnboarded(true);
+      return;
+    }
+    if (model.onboarding?.length) {
+      setLaunchPhase("onboarding");
+      setOnboarded(false);
+    } else {
+      setLaunchPhase("main");
+      setOnboarded(true);
+    }
+  }, [model, startPastOnboarding]);
+
+  useEffect(() => {
+    setItemPatches({});
+    setInjectedByTab({});
+    setCompose(null);
+    setDetail(null);
+  }, [model]);
 
   useEffect(() => {
     if (!model) {
@@ -258,7 +329,9 @@ export function ExpoLivePreview({
     const category = model.category ?? "general";
     void preloadImages(urls, category).then((urlMap) => {
       if (cancelled) return;
-      setDisplayModel(applyImageFallbacks(model, urlMap));
+      setDisplayModel(
+        withLegalSettings(applyImageFallbacks(model, urlMap))
+      );
       setImagesReady(true);
     });
     return () => {
@@ -287,6 +360,66 @@ export function ExpoLivePreview({
       setToast(was ? (ix?.toasts.unsaved ?? "Removed from saved") : ix?.toasts.saved(item.title) ?? `Saved ${item.title}`);
       return n;
     });
+  }
+
+  function handlePrimaryAction(item: ExpoListItem) {
+    if (!previewModel || !ix || editMode) return;
+    const outcome = resolveActionOutcome(item, previewModel, ix);
+    if (outcome.triggerSave) {
+      toggleSave(item);
+      return;
+    }
+    const mergedPatch = outcome.itemPatch
+      ? { ...itemPatches[item.id], ...outcome.itemPatch }
+      : itemPatches[item.id];
+    if (outcome.itemPatch) {
+      setItemPatches((p) => ({
+        ...p,
+        [item.id]: { ...p[item.id], ...outcome.itemPatch },
+      }));
+    }
+    if (outcome.navigateTab) setTab(outcome.navigateTab);
+    if (outcome.openCompose) {
+      setCompose({
+        ...outcome.openCompose,
+        sourceItemId: item.id,
+      });
+    } else if (outcome.openDetail) {
+      setDetail({ ...item, ...mergedPatch });
+    }
+    if (outcome.toast) setToast(outcome.toast);
+  }
+
+  function handleComposeSend(text: string) {
+    if (!compose || !previewModel || !ix) return;
+    const trimmed = text.trim();
+    if (!trimmed) return;
+    const messagesTab =
+      previewModel.previewActions?.messagingTabId ??
+      findTabId(previewModel, /message|chat|inbox/i) ??
+      findTabId(previewModel, /bell/i);
+    if (messagesTab) {
+      setInjectedByTab((prev) => ({
+        ...prev,
+        [messagesTab]: [
+          ...(prev[messagesTab] ?? []),
+          {
+            id: `sent-${Date.now()}`,
+            title: "You",
+            subtitle: trimmed.length > 48 ? `${trimmed.slice(0, 45)}…` : trimmed,
+            meta: "Sent",
+            badge: "New",
+            imageUrl: imageForCategory(ix.category, 8),
+            detailType: "article" as const,
+            body: trimmed,
+            primaryAction: "Reply",
+          },
+        ],
+      }));
+      setTab(messagesTab);
+    }
+    setCompose(null);
+    setToast("Message sent");
   }
 
   function addToCollection(item: ExpoListItem) {
@@ -327,7 +460,8 @@ export function ExpoLivePreview({
       setToast(ix.toasts.heroTab(label));
       return;
     }
-    const first = previewModel.home.sections[0]?.items[0];
+    const active = viewModel ?? previewModel;
+    const first = active?.home.sections[0]?.items[0];
     if (first && (ix.heroMode === "open_content" || ix.heroMode === "quick_capture")) {
       setDetail(first);
       setToast(ix.toasts.heroOpen(first.title));
@@ -546,7 +680,7 @@ export function ExpoLivePreview({
   }
 
   const t = theme!;
-  const readyModel = displayModel;
+  const readyModel = viewModel ?? displayModel;
 
   return (
     <div className={cn("mx-auto w-full max-w-[340px]", className)}>
@@ -581,7 +715,47 @@ export function ExpoLivePreview({
             <AnimatePresence mode="wait">
               {building && !showLive ? (
                 <BuildingSkeleton key="skel" percent={buildPercent ?? 0} accent={t.accent} />
-              ) : !onboarded ? (
+              ) : launchPhase === "role" && readyModel.flow?.roles?.length ? (
+                <RoleSelectScreen
+                  key="role"
+                  flow={readyModel.flow}
+                  theme={t}
+                  appName={readyModel.profile.displayName}
+                  onPick={(role) => {
+                    setSelectedRole(role);
+                    setTab("home");
+                    if (readyModel.flow?.setupFields?.length) setLaunchPhase("setup");
+                    else if (readyModel.onboarding.length && !startPastOnboarding) {
+                      setLaunchPhase("onboarding");
+                    } else {
+                      setOnboarded(true);
+                      setLaunchPhase("main");
+                    }
+                  }}
+                />
+              ) : launchPhase === "setup" && readyModel.flow?.setupFields?.length ? (
+                <SetupWizardScreen
+                  key="setup"
+                  flow={readyModel.flow}
+                  theme={t}
+                  roleLabel={selectedRole?.label}
+                  onDone={() => {
+                    if (readyModel.onboarding.length && !startPastOnboarding) {
+                      setLaunchPhase("onboarding");
+                    } else {
+                      confetti({
+                        particleCount: 40,
+                        spread: 60,
+                        origin: { y: 0.7 },
+                        colors: [t.accent, t.cream, "#fff"],
+                      });
+                      setOnboarded(true);
+                      setLaunchPhase("main");
+                      setTab("home");
+                    }
+                  }}
+                />
+              ) : !onboarded && readyModel.onboarding.length ? (
                 <Onboarding
                   key="ob"
                   model={readyModel}
@@ -597,11 +771,13 @@ export function ExpoLivePreview({
                         colors: [readyModel.theme.accent, readyModel.theme.cream, "#fff"],
                       });
                       setOnboarded(true);
+                      setLaunchPhase("main");
                       setTab("home");
                     }
                   }}
                   onSkip={() => {
                     setOnboarded(true);
+                    setLaunchPhase("main");
                     setTab("home");
                   }}
                 />
@@ -609,10 +785,14 @@ export function ExpoLivePreview({
                 <HomeScreen
                   key="home"
                   model={readyModel}
-                  onOpen={setDetail}
-                  onHero={handleHeroAction}
-                  hasScan={canScan}
-                  onVoice={canVoice ? () => setVoiceOpen(true) : undefined}
+                  editMode={editMode}
+                  selectedPath={selectedPath}
+                  onSelectTarget={onSelectTarget}
+                  onOpen={editMode ? () => {} : setDetail}
+                  onHero={editMode ? () => {} : handleHeroAction}
+                  onPrimaryAction={editMode ? undefined : handlePrimaryAction}
+                  hasScan={canScan && !editMode}
+                  onVoice={canVoice && !editMode ? () => setVoiceOpen(true) : undefined}
                   scanning={scanBusy}
                   recording={recording}
                 />
@@ -620,9 +800,12 @@ export function ExpoLivePreview({
                 <ProfileScreen
                   key="profile"
                   model={readyModel}
+                  editMode={editMode}
+                  selectedPath={selectedPath}
+                  onSelectTarget={onSelectTarget}
                   savedCount={savedIds.size}
                   savedStatPatterns={ix?.savedStatPatterns}
-                  onSetting={(label) => setSettingsRow(label)}
+                  onSetting={editMode ? () => {} : (label) => setSettingsRow(label)}
                 />
               ) : (
                 <TabScreen
@@ -630,6 +813,9 @@ export function ExpoLivePreview({
                   screen={resolvedTab?.screen}
                   tabId={resolvedTab?.resolvedId ?? tab}
                   theme={t}
+                  editMode={editMode}
+                  selectedPath={selectedPath}
+                  onSelectTarget={onSelectTarget}
                   checked={checked}
                   onToggle={(id) => {
                     setChecked((s) => {
@@ -639,12 +825,13 @@ export function ExpoLivePreview({
                       return n;
                     });
                   }}
-                  onOpen={setDetail}
+                  onOpen={editMode ? () => {} : setDetail}
+                  onPrimaryAction={editMode ? undefined : handlePrimaryAction}
                   extraItems={
                     tab === collectionTabId ? extraListItems : undefined
                   }
                   listsTab={ix ? isListsTab(tab, ix) : false}
-                  onShareList={canShare ? handleShareList : undefined}
+                  onShareList={canShare && !editMode ? handleShareList : undefined}
                 />
               )}
             </AnimatePresence>
@@ -660,7 +847,21 @@ export function ExpoLivePreview({
                 isSaved={savedIds.has(detail.id)}
                 onAddToList={canAddToCollection ? () => addToCollection(detail) : undefined}
                 onShare={canShare ? () => void handleShare(detail) : undefined}
+                onPrimaryAction={
+                  detail.primaryAction && !editMode
+                    ? () => handlePrimaryAction(detail)
+                    : undefined
+                }
                 collectionLabel={collectionLabel}
+              />
+            )}
+            {compose && (
+              <ComposeSheet
+                title={compose.title}
+                placeholder={compose.placeholder}
+                theme={t}
+                onClose={() => setCompose(null)}
+                onSend={handleComposeSend}
               />
             )}
             {settingsRow && (
@@ -742,8 +943,21 @@ export function ExpoLivePreview({
             )}
           </div>
 
-          {onboarded && imagesReady && (
-            <TabBar tabs={readyModel.tabs} active={tab} theme={t} onSelect={setTab} />
+          {launchPhase === "main" && onboarded && imagesReady && (
+            <TabBar
+              tabs={readyModel.tabs}
+              active={tab}
+              theme={t}
+              editMode={editMode}
+              selectedPath={selectedPath}
+              onSelectTarget={onSelectTarget}
+              onSelect={editMode ? () => {} : setTab}
+            />
+          )}
+          {editMode && (
+            <div className="pointer-events-none absolute inset-x-2 top-8 z-30 rounded-lg bg-coral/90 px-2 py-1 text-center text-[9px] font-bold text-white">
+              Tap anything to fix it
+            </div>
           )}
 
           <HomeIndicator />
@@ -1146,6 +1360,187 @@ function HomeIndicator() {
   );
 }
 
+function RoleSelectScreen({
+  flow,
+  theme,
+  appName,
+  onPick,
+}: {
+  flow: ExpoAppFlow;
+  theme: ExpoAppModel["theme"];
+  appName: string;
+  onPick: (role: ExpoUserRole) => void;
+}) {
+  const t = theme;
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: 12 }}
+      animate={{ opacity: 1, y: 0 }}
+      className="flex h-full flex-col justify-center py-2"
+    >
+      <p className="text-center text-[13px] font-extrabold" style={{ color: t.charcoal }}>
+        {flow.welcomeTitle ?? `Welcome to ${appName}`}
+      </p>
+      <p className="mt-1 text-center text-[10px] leading-snug" style={{ color: t.muted }}>
+        {flow.welcomeSubtitle ?? "How will you use the app?"}
+      </p>
+      <div className="mt-4 space-y-2">
+        {(flow.roles ?? []).map((role) => (
+          <motion.button
+            key={role.id}
+            type="button"
+            whileTap={{ scale: 0.98 }}
+            onClick={() => onPick(role)}
+            className="flex w-full items-center gap-3 rounded-2xl border p-3 text-left shadow-sm"
+            style={{ borderColor: t.line, background: "#fff" }}
+          >
+            <span className="grid h-10 w-10 place-items-center rounded-xl text-lg" style={{ background: `${t.accent}14` }}>
+              {role.emoji ?? "✦"}
+            </span>
+            <span className="min-w-0 flex-1">
+              <span className="block text-[11px] font-bold" style={{ color: t.charcoal }}>
+                {role.label}
+              </span>
+              <span className="block text-[9px] leading-snug" style={{ color: t.muted }}>
+                {role.description}
+              </span>
+            </span>
+            <ChevronRight className="h-4 w-4 shrink-0" style={{ color: t.muted }} />
+          </motion.button>
+        ))}
+      </div>
+    </motion.div>
+  );
+}
+
+function SetupWizardScreen({
+  flow,
+  theme,
+  roleLabel,
+  onDone,
+}: {
+  flow: ExpoAppFlow;
+  theme: ExpoAppModel["theme"];
+  roleLabel?: string;
+  onDone: () => void;
+}) {
+  const t = theme;
+  const fields = flow.setupFields ?? [];
+  const [values, setValues] = useState<Record<string, string>>(() =>
+    Object.fromEntries(fields.map((f) => [f.id, ""]))
+  );
+
+  const setField = (id: string, value: string) => {
+    setValues((prev) => ({ ...prev, [id]: value }));
+  };
+
+  const requiredOk = fields.every(
+    (f) => !f.required || (values[f.id]?.trim().length ?? 0) > 0
+  );
+
+  let lastSection = "";
+
+  const inputClass =
+    "mt-1 w-full rounded-xl border px-2.5 py-2 text-[10px] outline-none focus:ring-2 focus:ring-coral/25";
+  const inputStyle = {
+    borderColor: t.line,
+    background: "#fff",
+    color: t.charcoal,
+  };
+
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: 12 }}
+      animate={{ opacity: 1, y: 0 }}
+      className="flex h-full flex-col overflow-y-auto pb-2"
+    >
+      <p className="text-[12px] font-extrabold" style={{ color: t.charcoal }}>
+        {flow.setupTitle ?? "Tell us about you"}
+      </p>
+      <p className="mt-0.5 text-[9px]" style={{ color: t.muted }}>
+        {flow.setupSubtitle ?? (roleLabel ? `Setting up as ${roleLabel}` : "Quick profile setup")}
+      </p>
+      <div className="mt-3 space-y-2.5">
+        {fields.map((field) => {
+          const section = field.section;
+          const showSection = section && section !== lastSection;
+          if (showSection) lastSection = section;
+          const value = values[field.id] ?? "";
+          return (
+            <div key={field.id}>
+              {showSection && (
+                <p className="mb-1 text-[9px] font-bold uppercase tracking-wide" style={{ color: t.muted }}>
+                  {section}
+                </p>
+              )}
+              <label
+                htmlFor={`setup-${field.id}`}
+                className="block text-[9px] font-semibold"
+                style={{ color: t.charcoal }}
+              >
+                {field.label}
+                {field.required ? " *" : ""}
+              </label>
+              {field.kind === "select" && field.options ? (
+                <div className="mt-1 flex flex-wrap gap-1">
+                  {field.options.map((opt) => {
+                    const selected = value === opt;
+                    return (
+                      <button
+                        key={opt}
+                        type="button"
+                        onClick={() => setField(field.id, opt)}
+                        className="rounded-lg border px-2 py-1 text-[9px] font-semibold transition"
+                        style={{
+                          borderColor: selected ? t.accent : t.line,
+                          background: selected ? `${t.accent}18` : "#fff",
+                          color: t.charcoal,
+                        }}
+                      >
+                        {opt}
+                      </button>
+                    );
+                  })}
+                </div>
+              ) : field.kind === "textarea" ? (
+                <textarea
+                  id={`setup-${field.id}`}
+                  rows={3}
+                  value={value}
+                  placeholder={field.placeholder}
+                  onChange={(e) => setField(field.id, e.target.value)}
+                  className={`${inputClass} min-h-[4.5rem] resize-none`}
+                  style={inputStyle}
+                />
+              ) : (
+                <input
+                  id={`setup-${field.id}`}
+                  type="text"
+                  value={value}
+                  placeholder={field.placeholder ?? field.label}
+                  onChange={(e) => setField(field.id, e.target.value)}
+                  className={inputClass}
+                  style={inputStyle}
+                />
+              )}
+            </div>
+          );
+        })}
+      </div>
+      <motion.button
+        type="button"
+        whileTap={{ scale: 0.97 }}
+        disabled={!requiredOk}
+        onClick={onDone}
+        className="mt-4 w-full rounded-2xl py-2.5 text-[10px] font-bold text-white disabled:opacity-45"
+        style={{ background: t.accent }}
+      >
+        Get Started →
+      </motion.button>
+    </motion.div>
+  );
+}
+
 function Onboarding({
   model,
   idx,
@@ -1262,18 +1657,67 @@ function Onboarding({
   );
 }
 
+type FixEditProps = {
+  editMode?: boolean;
+  selectedPath?: string | null;
+  onSelectTarget?: (target: TweakTarget) => void;
+};
+
+function Selectable({
+  editMode,
+  path,
+  label,
+  field,
+  selectedPath,
+  onSelectTarget,
+  children,
+  className,
+}: FixEditProps & {
+  path: string;
+  label: string;
+  field: string;
+  children: ReactNode;
+  className?: string;
+}) {
+  if (!editMode || !onSelectTarget) return <>{children}</>;
+  const selected = selectedPath === path;
+  return (
+    <div
+      role="button"
+      tabIndex={0}
+      onClick={(e) => {
+        e.stopPropagation();
+        e.preventDefault();
+        onSelectTarget({ path, label, field });
+      }}
+      className={cn(
+        className,
+        "rounded-lg transition",
+        selected ? "ring-2 ring-coral ring-offset-1" : "hover:ring-2 hover:ring-coral/35"
+      )}
+    >
+      {children}
+    </div>
+  );
+}
+
 function HomeScreen({
   model,
   onOpen,
   onHero,
+  onPrimaryAction,
   hasScan,
   onVoice,
   scanning,
   recording,
-}: {
+  editMode,
+  selectedPath,
+  onSelectTarget,
+}: FixEditProps & {
   model: ExpoAppModel;
   onOpen: (item: ExpoListItem) => void;
   onHero: () => void;
+  onPrimaryAction?: (item: ExpoListItem) => void;
   hasScan?: boolean;
   onVoice?: () => void;
   scanning?: boolean;
@@ -1284,37 +1728,65 @@ function HomeScreen({
   const displayFont = { fontFamily: `var(--font-display), Georgia, serif` };
   return (
     <div className="h-full overflow-y-auto pb-2">
-      <motion.p
-        initial="hidden"
-        animate="show"
-        variants={fadeUp}
-        custom={0}
-        className="text-[12px] font-extrabold"
-        style={{ color: t.charcoal, ...displayFont }}
+      <Selectable
+        editMode={editMode}
+        path="home.headline"
+        label="Home headline"
+        field="Headline"
+        selectedPath={selectedPath}
+        onSelectTarget={onSelectTarget}
       >
-        {h.headline}
-      </motion.p>
-      <motion.p
-        variants={fadeUp}
-        custom={1}
-        initial="hidden"
-        animate="show"
-        className="mt-0.5 text-[10px] leading-snug"
-        style={{ color: t.muted }}
+        <motion.p
+          initial="hidden"
+          animate="show"
+          variants={fadeUp}
+          custom={0}
+          className="text-[12px] font-extrabold"
+          style={{ color: t.charcoal, ...displayFont }}
+        >
+          {h.headline}
+        </motion.p>
+      </Selectable>
+      <Selectable
+        editMode={editMode}
+        path="home.subheadline"
+        label="Home subheadline"
+        field="Subheadline"
+        selectedPath={selectedPath}
+        onSelectTarget={onSelectTarget}
+        className="mt-0.5 block"
       >
-        {h.subheadline}
-      </motion.p>
+        <motion.p
+          variants={fadeUp}
+          custom={1}
+          initial="hidden"
+          animate="show"
+          className="text-[10px] leading-snug"
+          style={{ color: t.muted }}
+        >
+          {h.subheadline}
+        </motion.p>
+      </Selectable>
 
+      <Selectable
+        editMode={editMode}
+        path="home.heroLabel"
+        label="Main button"
+        field="Hero button"
+        selectedPath={selectedPath}
+        onSelectTarget={onSelectTarget}
+        className="mt-2.5 block"
+      >
       <motion.button
         type="button"
         variants={fadeUp}
         custom={2}
         initial="hidden"
         animate="show"
-        whileTap={{ scale: 0.97 }}
-        onClick={onHero}
+        whileTap={editMode ? undefined : { scale: 0.97 }}
+        onClick={editMode ? undefined : onHero}
         disabled={scanning}
-        className="mt-2.5 flex w-full items-center gap-2 rounded-2xl p-2.5 text-left shadow-soft"
+        className="flex w-full items-center gap-2 rounded-2xl p-2.5 text-left shadow-soft"
         style={{ background: t.accent }}
       >
         <motion.span
@@ -1336,6 +1808,7 @@ function HomeScreen({
         </span>
         <ChevronRight className="h-3.5 w-3.5 shrink-0 text-white/80" />
       </motion.button>
+      </Selectable>
 
       {onVoice && (
         <motion.button
@@ -1382,9 +1855,14 @@ function HomeScreen({
               <ItemCard
                 key={item.id}
                 item={item}
+                itemPath={`home.sections[${si}].items[${i}]`}
                 theme={t}
                 index={si * 3 + i + 3}
+                editMode={editMode}
+                selectedPath={selectedPath}
+                onSelectTarget={onSelectTarget}
                 onOpen={() => onOpen(item)}
+                onPrimaryAction={onPrimaryAction}
               />
             ))}
           </div>
@@ -1401,16 +1879,21 @@ function TabScreen({
   checked,
   onToggle,
   onOpen,
+  onPrimaryAction,
   listsTab,
   extraItems,
   onShareList,
-}: {
+  editMode,
+  selectedPath,
+  onSelectTarget,
+}: FixEditProps & {
   screen: ExpoAppModel["tabScreens"][string] | undefined;
   tabId: string;
   theme: ExpoAppModel["theme"];
   checked: Set<string>;
   onToggle: (id: string) => void;
   onOpen: (item: ExpoListItem) => void;
+  onPrimaryAction?: (item: ExpoListItem) => void;
   listsTab?: boolean;
   extraItems?: ExpoListItem[];
   onShareList?: () => void;
@@ -1426,12 +1909,30 @@ function TabScreen({
     <div className="h-full overflow-y-auto pb-2">
       <div className="flex items-start justify-between gap-2">
         <div className="min-w-0">
-          <p className="text-[12px] font-extrabold" style={{ color: t.charcoal }}>
-            {screen.title}
-          </p>
-          <p className="text-[10px]" style={{ color: t.muted }}>
-            {screen.subtitle}
-          </p>
+          <Selectable
+            editMode={editMode}
+            path={`tabScreens.${tabId}.title`}
+            label={`${tabId} tab title`}
+            field="Tab title"
+            selectedPath={selectedPath}
+            onSelectTarget={onSelectTarget}
+          >
+            <p className="text-[12px] font-extrabold" style={{ color: t.charcoal }}>
+              {screen.title}
+            </p>
+          </Selectable>
+          <Selectable
+            editMode={editMode}
+            path={`tabScreens.${tabId}.subtitle`}
+            label={`${tabId} tab subtitle`}
+            field="Tab subtitle"
+            selectedPath={selectedPath}
+            onSelectTarget={onSelectTarget}
+          >
+            <p className="text-[10px]" style={{ color: t.muted }}>
+              {screen.subtitle}
+            </p>
+          </Selectable>
         </div>
         {onShareList && items.length > 0 && (
           <button
@@ -1446,7 +1947,7 @@ function TabScreen({
         )}
       </div>
       <div className="mt-2 space-y-1.5">
-        {items.map((item, i) =>
+        {screen.items.map((item, i) =>
           listsTab ? (
             <div
               key={item.id}
@@ -1482,12 +1983,27 @@ function TabScreen({
             <ItemCard
               key={item.id}
               item={item}
+              itemPath={`tabScreens.${tabId}.items[${i}]`}
               theme={t}
               index={i}
+              editMode={editMode}
+              selectedPath={selectedPath}
+              onSelectTarget={onSelectTarget}
               onOpen={() => onOpen(item)}
+              onPrimaryAction={onPrimaryAction}
             />
           )
         )}
+        {(extraItems ?? []).map((item, i) => (
+          <ItemCard
+            key={item.id}
+            item={item}
+            theme={t}
+            index={screen.items.length + i}
+            onOpen={() => onOpen(item)}
+            onPrimaryAction={onPrimaryAction}
+          />
+        ))}
       </div>
     </div>
   );
@@ -1495,55 +2011,130 @@ function TabScreen({
 
 function ItemCard({
   item,
+  itemPath,
   theme,
   index,
   onOpen,
-}: {
+  onPrimaryAction,
+  editMode,
+  selectedPath,
+  onSelectTarget,
+}: FixEditProps & {
   item: ExpoListItem;
+  itemPath?: string;
   theme: { accent: string; charcoal: string; muted: string; line: string; card: string };
   index: number;
   onOpen: () => void;
+  onPrimaryAction?: (item: ExpoListItem) => void;
 }) {
+  const base = itemPath ?? "";
+  const cardLabel = item.title || "Card";
   return (
-    <motion.button
-      type="button"
+    <motion.div
       variants={fadeUp}
       custom={index}
       initial="hidden"
       animate="show"
-      onClick={onOpen}
-      className="flex w-full gap-2 rounded-xl border p-1.5 text-left shadow-sm transition hover:shadow-md"
-      style={{ borderColor: theme.line, background: theme.card }}
+      className="overflow-hidden rounded-2xl border text-left shadow-sm"
+      style={{ borderColor: theme.line, background: "#fff" }}
     >
-      <CoverImage
-        src={item.imageUrl}
-        fallbackIndex={index}
-        className="h-11 w-11 shrink-0 rounded-lg object-cover"
-      />
-      <span className="min-w-0 flex-1 py-0.5">
-        <span className="flex items-start justify-between gap-1">
-          <span className="text-[10px] font-bold leading-tight" style={{ color: theme.charcoal }}>
-            {item.title}
+      <button
+        type="button"
+        onClick={editMode ? undefined : onOpen}
+        className="flex w-full gap-2 p-2 text-left"
+      >
+        <CoverImage
+          src={item.imageUrl}
+          fallbackIndex={index}
+          className="h-11 w-11 shrink-0 rounded-xl object-cover"
+        />
+        <span className="min-w-0 flex-1 py-0.5">
+          <span className="flex flex-wrap items-center gap-1">
+            {(item.tags ?? []).map((tag) => (
+              <span
+                key={tag}
+                className="rounded-md px-1 py-0.5 text-[7px] font-bold"
+                style={{ background: `${theme.accent}14`, color: theme.accent }}
+              >
+                {tag}
+              </span>
+            ))}
+            {item.badge && (
+              <span
+                className="rounded-md px-1 py-0.5 text-[7px] font-bold uppercase"
+                style={{ background: `${theme.accent}18`, color: theme.accent }}
+              >
+                {item.badge}
+              </span>
+            )}
           </span>
-          {item.badge && (
-            <span
-              className="shrink-0 rounded-md px-1 py-0.5 text-[8px] font-bold uppercase"
-              style={{ background: `${theme.accent}18`, color: theme.accent }}
-            >
-              {item.badge}
+          <Selectable
+            editMode={editMode && Boolean(itemPath)}
+            path={`${base}.title`}
+            label={cardLabel}
+            field="Title"
+            selectedPath={selectedPath}
+            onSelectTarget={onSelectTarget}
+            className="block"
+          >
+            <span className="mt-0.5 block text-[10px] font-bold leading-tight" style={{ color: theme.charcoal }}>
+              {item.title}
+            </span>
+          </Selectable>
+          <Selectable
+            editMode={editMode && Boolean(itemPath)}
+            path={`${base}.subtitle`}
+            label={cardLabel}
+            field="Subtitle"
+            selectedPath={selectedPath}
+            onSelectTarget={onSelectTarget}
+            className="block"
+          >
+            <span className="mt-0.5 block text-[9px] leading-snug" style={{ color: theme.muted }}>
+              {item.subtitle}
+            </span>
+          </Selectable>
+          {item.meta && (
+            <span className="mt-0.5 block text-[8px] font-semibold" style={{ color: theme.accent }}>
+              {item.meta}
             </span>
           )}
         </span>
-        <span className="mt-0.5 block text-[9px] leading-snug" style={{ color: theme.muted }}>
-          {item.subtitle}
-        </span>
-        {item.meta && (
-          <span className="mt-0.5 block text-[8px] font-semibold" style={{ color: theme.accent }}>
-            {item.meta}
-          </span>
-        )}
-      </span>
-    </motion.button>
+      </button>
+      {item.quote && (
+        <p
+          className="mx-2 mb-2 rounded-lg border-l-2 px-2 py-1 text-[8px] italic leading-snug"
+          style={{ borderColor: theme.accent, color: theme.muted, background: theme.card }}
+        >
+          {item.quote}
+        </p>
+      )}
+      {item.primaryAction && (
+        <Selectable
+          editMode={editMode && Boolean(itemPath)}
+          path={`${base}.primaryAction`}
+          label={cardLabel}
+          field="Button label"
+          selectedPath={selectedPath}
+          onSelectTarget={onSelectTarget}
+          className="mx-2 mb-2 block"
+        >
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              if (editMode) return;
+              if (onPrimaryAction) onPrimaryAction(item);
+              else onOpen();
+            }}
+            className="w-full rounded-xl py-2 text-[9px] font-bold text-white"
+            style={{ background: theme.accent }}
+          >
+            {item.primaryAction}
+          </button>
+        </Selectable>
+      )}
+    </motion.div>
   );
 }
 
@@ -1552,7 +2143,10 @@ function ProfileScreen({
   savedCount,
   savedStatPatterns,
   onSetting,
-}: {
+  editMode,
+  selectedPath,
+  onSelectTarget,
+}: FixEditProps & {
   model: ExpoAppModel;
   savedCount: number;
   savedStatPatterns?: string[];
@@ -1578,12 +2172,30 @@ function ProfileScreen({
           {p.displayName.charAt(0)}
         </span>
         <div>
-          <p className="text-[11px] font-extrabold" style={{ color: t.charcoal }}>
-            {p.displayName}
-          </p>
-          <p className="text-[9px]" style={{ color: t.muted }}>
-            {p.tagline}
-          </p>
+          <Selectable
+            editMode={editMode}
+            path="profile.displayName"
+            label="Profile name"
+            field="Display name"
+            selectedPath={selectedPath}
+            onSelectTarget={onSelectTarget}
+          >
+            <p className="text-[11px] font-extrabold" style={{ color: t.charcoal }}>
+              {p.displayName}
+            </p>
+          </Selectable>
+          <Selectable
+            editMode={editMode}
+            path="profile.tagline"
+            label="Profile tagline"
+            field="Tagline"
+            selectedPath={selectedPath}
+            onSelectTarget={onSelectTarget}
+          >
+            <p className="text-[9px]" style={{ color: t.muted }}>
+              {p.tagline}
+            </p>
+          </Selectable>
         </div>
       </div>
       <div className="mt-3 grid grid-cols-3 gap-1.5">
@@ -1637,7 +2249,10 @@ function TabBar({
   active,
   theme,
   onSelect,
-}: {
+  editMode,
+  selectedPath,
+  onSelectTarget,
+}: FixEditProps & {
   tabs: ExpoAppModel["tabs"];
   active: string;
   theme: ExpoAppModel["theme"];
@@ -1648,7 +2263,7 @@ function TabBar({
       className="flex shrink-0 border-t px-0.5 py-1"
       style={{ borderColor: theme.line, background: theme.card }}
     >
-      {tabs.map((tab) => {
+      {tabs.map((tab, ti) => {
         const Icon = ICONS[tab.icon] ?? Home;
         const on = active === tab.id;
         return (
@@ -1662,12 +2277,21 @@ function TabBar({
               className="h-3.5 w-3.5"
               style={{ color: on ? theme.accent : theme.muted }}
             />
-            <span
-              className="max-w-full truncate text-[9px] font-semibold"
-              style={{ color: on ? theme.accent : theme.muted }}
+            <Selectable
+              editMode={editMode}
+              path={`tabs[${ti}].label`}
+              label={`${tab.label} tab`}
+              field="Tab label"
+              selectedPath={selectedPath}
+              onSelectTarget={onSelectTarget}
             >
-              {tab.label}
-            </span>
+              <span
+                className="max-w-full truncate text-[9px] font-semibold"
+                style={{ color: on ? theme.accent : theme.muted }}
+              >
+                {tab.label}
+              </span>
+            </Selectable>
           </button>
         );
       })}
@@ -1767,6 +2391,69 @@ function SettingsSheet({
   );
 }
 
+function ComposeSheet({
+  title,
+  placeholder,
+  theme,
+  onClose,
+  onSend,
+}: {
+  title: string;
+  placeholder: string;
+  theme: ExpoAppModel["theme"];
+  onClose: () => void;
+  onSend: (text: string) => void;
+}) {
+  const [draft, setDraft] = useState("");
+  return (
+    <motion.div
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      className="absolute inset-0 z-40 flex flex-col justify-end bg-charcoal/40"
+      onClick={onClose}
+    >
+      <motion.div
+        initial={{ y: "100%" }}
+        animate={{ y: 0 }}
+        className="rounded-t-2xl p-3"
+        style={{ background: theme.card }}
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="mb-2 flex items-center justify-between">
+          <p className="text-[10px] font-bold" style={{ color: theme.charcoal }}>
+            {title}
+          </p>
+          <button type="button" onClick={onClose} aria-label="Close">
+            <X className="h-4 w-4" style={{ color: theme.muted }} />
+          </button>
+        </div>
+        <textarea
+          autoFocus
+          rows={3}
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          placeholder={placeholder}
+          className="w-full resize-none rounded-xl border px-2.5 py-2 text-[10px] outline-none focus:ring-2 focus:ring-coral/25"
+          style={{
+            borderColor: theme.line,
+            background: theme.cream,
+            color: theme.charcoal,
+          }}
+        />
+        <button
+          type="button"
+          disabled={!draft.trim()}
+          onClick={() => onSend(draft)}
+          className="mt-2 w-full rounded-xl py-2.5 text-[10px] font-bold text-white disabled:opacity-45"
+          style={{ background: theme.accent }}
+        >
+          Send
+        </button>
+      </motion.div>
+    </motion.div>
+  );
+}
+
 function DetailSheet({
   item,
   theme,
@@ -1777,6 +2464,7 @@ function DetailSheet({
   isSaved,
   onAddToList,
   onShare,
+  onPrimaryAction,
   collectionLabel = "Add to collection",
 }: {
   item: ExpoListItem;
@@ -1788,6 +2476,7 @@ function DetailSheet({
   isSaved?: boolean;
   onAddToList?: () => void;
   onShare?: () => void;
+  onPrimaryAction?: () => void;
   collectionLabel?: string;
 }) {
   return (
@@ -1926,6 +2615,16 @@ function DetailSheet({
           >
             <Volume2 className="h-3 w-3" />
             {listenBusy ? "Generating audio…" : "Listen"}
+          </button>
+        )}
+        {item.primaryAction && onPrimaryAction && (
+          <button
+            type="button"
+            onClick={onPrimaryAction}
+            className="mt-1.5 w-full rounded-xl py-2.5 text-[9px] font-bold text-white"
+            style={{ background: theme.accent }}
+          >
+            {item.primaryAction}
           </button>
         )}
         <button

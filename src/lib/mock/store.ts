@@ -49,6 +49,7 @@ function migrateProject(p: Project): Project {
     target: p.target ?? null,
     githubRepoUrl: p.githubRepoUrl ?? null,
     expoAppModel: p.expoAppModel ?? null,
+    aiUsageUsd: p.aiUsageUsd ?? 0,
     masterPrompt: p.masterPrompt ? normalizeMasterPrompt(p.masterPrompt) : null,
   };
 }

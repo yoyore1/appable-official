@@ -69,6 +69,13 @@ export interface InterviewTurn {
   answer: string;
 }
 
+/** Server-prefetched pills for the next interview step (landing handoff). */
+export interface InterviewStepPrefetch {
+  stepId: string;
+  suggestions: string[];
+  appablePick: string;
+}
+
 export interface Project {
   id: string;
   userId: string;
@@ -77,6 +84,10 @@ export interface Project {
   vibe: Vibe | null;
   thumbnailHue: number; // for the phone-preview placeholder gradient
   interview: InterviewTurn[];
+  /** Kimi/rule-picked 0–2 questions from the curated pool (after idea). */
+  interviewPlan?: import("@/lib/interviewQuestionPool").PoolQuestionId[] | null;
+  /** Consumed on first fetch for `stepId` — avoids a second LLM round-trip after landing. */
+  interviewStepPrefetch?: InterviewStepPrefetch | null;
   masterPrompt: MasterBuildPrompt | null;
   launch: LaunchAssets;
   legal: LegalDocs;
@@ -87,6 +98,8 @@ export interface Project {
   githubRepoUrl: string | null;
   /** Generated RN/Expo screen model — web preview + future codegen source of truth. */
   expoAppModel: import("@/lib/expoApp/types").ExpoAppModel | null;
+  /** Guest-session AI spend (merged to user on claim). */
+  aiUsageUsd?: number;
   createdAt: string;
   updatedAt: string;
 }

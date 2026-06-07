@@ -1,21 +1,28 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { AnimatePresence, motion } from "framer-motion";
-import { Check, Pencil, Send, Sparkles } from "lucide-react";
+import { Check, Loader2, MousePointer2, Pencil, Send, Sparkles } from "lucide-react";
+import { AiBudgetBar } from "@/components/AiBudgetBar";
+import { PreviewFixPanel } from "@/components/PreviewFixPanel";
 import { ExpoLivePreview } from "@/components/ExpoLivePreview";
+import { ExpoPhoneGuide } from "@/components/ExpoPhoneGuide";
 import { TypingIndicator } from "@/components/TypingIndicator";
-import { expoBuildSteps } from "@/lib/expoBuildProgress";
+import { formatBuildRecap } from "@/lib/expoApp/buildRecap";
+import { expoBuildMicroSteps } from "@/lib/expoBuildProgress";
 import { planChecklist } from "@/lib/expoPreviewTheme";
+import type { SelectionTweakAction } from "@/lib/expoApp/applySelectionTweak";
+import { getStringAtPath, type TweakTarget } from "@/lib/expoApp/tweakPaths";
 import type { ExpoAppModel } from "@/lib/expoApp/types";
 import {
+  expoSelectionTweak,
   expoTweakChat,
   prepareExpoBuild,
   runExpoWebBuild,
   updateExpoPlan,
 } from "@/server/projects";
-import type { MasterBuildPrompt } from "@/lib/types";
+import type { InterviewTurn, MasterBuildPrompt } from "@/lib/types";
 
 type Phase = "summary" | "edit" | "building" | "done";
 
@@ -25,10 +32,12 @@ export function ExpoBuildRoom({
   projectId,
   initialPlan,
   initialModel,
+  interview = [],
 }: {
   projectId: string;
   initialPlan: MasterBuildPrompt;
   initialModel?: ExpoAppModel | null;
+  interview?: InterviewTurn[];
 }) {
   const [plan, setPlan] = useState(initialPlan);
   const [appModel, setAppModel] = useState<ExpoAppModel | null>(initialModel ?? null);
@@ -39,10 +48,18 @@ export function ExpoBuildRoom({
   const [stepIdx, setStepIdx] = useState(0);
   const [buildLabels, setBuildLabels] = useState<string[]>([]);
   const [tweakInput, setTweakInput] = useState("");
+  const [fixMode, setFixMode] = useState(false);
+  const [fixTarget, setFixTarget] = useState<TweakTarget | null>(null);
+  const [fixBusy, setFixBusy] = useState(false);
+  const [budgetKey, setBudgetKey] = useState(0);
   const endRef = useRef<HTMLDivElement>(null);
   const buildTimers = useRef<ReturnType<typeof setInterval>[]>([]);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const serverPercentRef = useRef(0);
+  const microSteps = useMemo(
+    () => expoBuildMicroSteps(plan, interview),
+    [plan, interview]
+  );
 
   const [editForm, setEditForm] = useState({
     appName: plan.appName,
@@ -95,10 +112,11 @@ export function ExpoBuildRoom({
       },
     ]);
     setPhase("building");
-    setBuildPercent(4);
-    serverPercentRef.current = 4;
+    setBuildPercent(2);
+    serverPercentRef.current = 2;
+    let microIdx = 0;
     setStepIdx(0);
-    setBuildLabels([expoBuildSteps(plan)[0]?.label ?? "Starting…"]);
+    setBuildLabels([microSteps[0]?.label ?? "Starting…"]);
 
     const poll = () => {
       void fetch(`/api/projects/${projectId}/build-progress`)
@@ -106,53 +124,54 @@ export function ExpoBuildRoom({
         .then((data: { active?: boolean; label?: string; index?: number; percent?: number }) => {
           if (!data.active) return;
           if (typeof data.percent === "number") {
-            serverPercentRef.current = data.percent;
-            setBuildPercent((p) => Math.max(p, data.percent!));
-          }
-          if (typeof data.index === "number") setStepIdx(data.index);
-          if (data.label) {
-            setBuildLabels((prev) => {
-              const base = (s: string) => s.replace(/\s*—.*$/, "").trim();
-              const next = data.label!;
-              const last = prev[prev.length - 1];
-              if (last && base(last) === base(next)) {
-                return [...prev.slice(0, -1), next];
-              }
-              if (prev.some((p) => base(p) === base(next))) return prev;
-              return [...prev, next];
-            });
+            serverPercentRef.current = Math.max(serverPercentRef.current, data.percent);
           }
         })
         .catch(() => undefined);
     };
 
     poll();
-    pollRef.current = setInterval(poll, 500);
+    pollRef.current = setInterval(poll, 400);
     buildTimers.current.push(pollRef.current);
 
-    const creep = setInterval(() => {
+    const microAdvance = setInterval(() => {
+      if (microIdx < microSteps.length - 1) {
+        microIdx += 1;
+        setStepIdx(microIdx);
+        const label = microSteps[microIdx].label;
+        setBuildLabels((prev) => (prev.includes(label) ? prev : [...prev, label]));
+      }
+    }, 3800);
+    buildTimers.current.push(microAdvance);
+
+    const smooth = setInterval(() => {
+      const microTarget = microSteps[microIdx]?.percent ?? 0;
+      const target = Math.max(serverPercentRef.current, microTarget);
       setBuildPercent((p) => {
-        const ceiling = Math.min(92, serverPercentRef.current + 5);
-        if (p >= ceiling) return p;
-        return p + 1;
+        if (p >= target) return p;
+        return Math.min(target, p + 0.8);
       });
-    }, 3500);
-    buildTimers.current.push(creep);
+    }, 280);
+    buildTimers.current.push(smooth);
 
     try {
       const result = await runExpoWebBuild(projectId);
       clearBuildTimers();
+      serverPercentRef.current = 100;
       setBuildPercent(100);
+      setStepIdx(microSteps.length - 1);
+      setBuildLabels(microSteps.map((s) => s.label));
       setAppModel(result.model);
       setBubbles((b) => [
         ...b,
         {
           id: "done",
           role: "ai",
-          text: `**${plan.appName}** is ready. 🎉 Tap any card → **Save** or add to your list/plan tab. Profile settings work.`,
+          text: formatBuildRecap(result.model, plan, interview),
         },
       ]);
       setPhase("done");
+      setBudgetKey((k) => k + 1);
     } catch {
       clearBuildTimers();
       setBubbles((b) => [
@@ -225,14 +244,18 @@ export function ExpoBuildRoom({
 
   const showPreview = phase === "building" || phase === "done" || Boolean(appModel);
 
+  const previewReady = phase === "done" && Boolean(appModel);
+
   return (
-    <div className="grid min-h-0 flex-1 gap-5 lg:grid-cols-[minmax(0,1fr)_min(380px,40vw)]">
+    <div className="flex min-h-0 w-full flex-1 flex-col gap-4">
+      <AiBudgetBar projectId={projectId} refreshKey={budgetKey} className="shrink-0" />
+      <div className="grid min-h-0 w-full flex-1 gap-5 lg:grid-cols-[minmax(0,1fr)_auto] xl:grid-cols-[minmax(300px,1.15fr)_minmax(320px,400px)_minmax(260px,300px)]">
       <div className="card-float flex min-h-0 flex-col overflow-hidden p-4">
         <div className="mb-2 flex items-center gap-2">
           <span className="grid h-8 w-8 place-items-center rounded-xl bg-coral text-sm font-bold text-white">
             A
           </span>
-          <div>
+          <div className="min-w-0 flex-1">
             <p className="text-sm font-semibold">Build here · Expo</p>
             <p className="text-xs text-warmgrey">Your app, in the browser</p>
           </div>
@@ -286,7 +309,7 @@ export function ExpoBuildRoom({
                       {i < buildLabels.length - 1 ? (
                         "✓"
                       ) : (
-                        <Sparkles className="h-3 w-3 animate-pulse-soft" />
+                        <Loader2 className="h-3 w-3 animate-spin" />
                       )}
                     </span>
                     {label}
@@ -364,7 +387,26 @@ export function ExpoBuildRoom({
 
         {phase === "done" && (
           <div className="mt-3 shrink-0 space-y-2 border-t border-line/60 pt-3">
-            <p className="text-xs text-warmgrey">Spotted something? One line — we&apos;ll update the preview live:</p>
+            <button
+              type="button"
+              onClick={() => {
+                setFixMode((m) => !m);
+                setFixTarget(null);
+              }}
+              className={`flex w-full items-center justify-center gap-2 rounded-xl border px-3 py-2 text-sm font-semibold transition ${
+                fixMode
+                  ? "border-coral bg-coral/10 text-coral-deep"
+                  : "border-line bg-white text-charcoal hover:border-coral/40"
+              }`}
+            >
+              <MousePointer2 className="h-4 w-4" />
+              {fixMode ? "Done selecting" : "Tap to fix in preview"}
+            </button>
+            <p className="text-xs text-warmgrey">
+              {fixMode
+                ? "Tap any headline, card, or button in the phone — then pick a quick fix."
+                : "Or describe a change in one line:"}
+            </p>
             <form
               className="flex gap-2"
               onSubmit={(e) => {
@@ -377,6 +419,7 @@ export function ExpoBuildRoom({
                 void expoTweakChat(projectId, msg)
                   .then((res) => {
                     if (res.ok) setAppModel(res.model);
+                    setBudgetKey((k) => k + 1);
                     setBubbles((b) => [
                       ...b,
                       {
@@ -410,24 +453,77 @@ export function ExpoBuildRoom({
         )}
       </div>
 
-      <div className="flex flex-col items-center lg:sticky lg:top-20 lg:self-start">
-        {showPreview ? (
-          <ExpoLivePreview
+      <div className="flex min-h-0 flex-col gap-4 lg:sticky lg:top-4 lg:self-start xl:col-span-1">
+        <div className="flex w-full max-w-[400px] flex-col items-center gap-2 self-center">
+          {showPreview ? (
+            <>
+              <ExpoLivePreview
+                projectId={projectId}
+                model={appModel}
+                building={phase === "building"}
+                buildPercent={buildPercent}
+                startPastOnboarding
+                alive={phase === "done"}
+                editMode={fixMode && phase === "done"}
+                selectedPath={fixTarget?.path ?? null}
+                onSelectTarget={(t) => setFixTarget(t)}
+              />
+              {fixTarget && appModel && phase === "done" && (
+                <PreviewFixPanel
+                  target={fixTarget}
+                  currentValue={getStringAtPath(appModel, fixTarget.path)}
+                  busy={fixBusy}
+                  onClose={() => setFixTarget(null)}
+                  onApply={(action: SelectionTweakAction) => {
+                    setFixBusy(true);
+                    void expoSelectionTweak(projectId, fixTarget.path, action)
+                      .then((res) => {
+                        setBudgetKey((k) => k + 1);
+                        if (res.ok) {
+                          setAppModel(res.model);
+                          setBubbles((b) => [
+                            ...b,
+                            { id: `fx-${Date.now()}`, role: "ai", text: res.reply },
+                          ]);
+                          if (action.type === "remove") setFixTarget(null);
+                        } else {
+                          setBubbles((b) => [
+                            ...b,
+                            { id: `fxe-${Date.now()}`, role: "ai", text: res.message },
+                          ]);
+                        }
+                      })
+                      .finally(() => setFixBusy(false));
+                  }}
+                />
+              )}
+            </>
+          ) : (
+            <div className="w-full max-w-[380px] rounded-2xl border border-dashed border-line/80 bg-cream/50 p-6 text-center">
+              <Sparkles className="mx-auto h-8 w-8 text-coral/60" />
+              <p className="mt-2 text-xs text-warmgrey">
+                Your live preview appears here when you confirm
+              </p>
+            </div>
+          )}
+        </div>
+
+        <div className="xl:hidden">
+          <ExpoPhoneGuide
             projectId={projectId}
-            model={appModel}
-            building={phase === "building"}
-            buildPercent={buildPercent}
-            startPastOnboarding
-            alive={phase === "done"}
+            appName={plan.appName}
+            ready={previewReady}
           />
-        ) : (
-          <div className="rounded-2xl border border-dashed border-line/80 bg-cream/50 p-6 text-center">
-            <Sparkles className="mx-auto h-8 w-8 text-coral/60" />
-            <p className="mt-2 text-xs text-warmgrey">
-              Your live preview appears here when you confirm
-            </p>
-          </div>
-        )}
+        </div>
+      </div>
+
+      <div className="hidden min-h-0 xl:block">
+        <ExpoPhoneGuide
+          projectId={projectId}
+          appName={plan.appName}
+          ready={previewReady}
+        />
+      </div>
       </div>
     </div>
   );

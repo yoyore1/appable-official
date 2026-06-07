@@ -24,6 +24,14 @@ export interface ExpoListItem {
   meta?: string;
   badge?: string;
   imageUrl: string;
+  /** Small chips — breed, size, status. */
+  tags?: string[];
+  /** Owner note or pull quote on cards. */
+  quote?: string;
+  /** Primary CTA on card/detail — e.g. Accept Walk, Book, Save. */
+  primaryAction?: string;
+  /** Dual-role apps: which role sees this item (owner, walker, buyer, …). */
+  forRole?: string;
   /** Full detail body — recipes, articles, list notes. */
   body?: string;
   /** Recipe / shopping list ingredients with quantities. */
@@ -31,6 +39,67 @@ export interface ExpoListItem {
   /** Numbered cooking or instruction steps. */
   steps?: string[];
   detailType?: "recipe" | "list" | "article" | "generic";
+}
+
+export interface ExpoUserRole {
+  id: string;
+  label: string;
+  description: string;
+  emoji?: string;
+}
+
+export interface ExpoSetupField {
+  id: string;
+  label: string;
+  placeholder?: string;
+  required?: boolean;
+  kind?: "text" | "textarea" | "select";
+  options?: string[];
+  section?: string;
+}
+
+/** First-launch flow before main tabs — role pick + profile wizard. */
+export interface ExpoAppFlow {
+  welcomeTitle?: string;
+  welcomeSubtitle?: string;
+  roles?: ExpoUserRole[];
+  setupTitle?: string;
+  setupSubtitle?: string;
+  setupFields?: ExpoSetupField[];
+}
+
+export interface ExpoBuildRecap {
+  headline: string;
+  sections: { title: string; bullets: string[] }[];
+  suggestedNext?: string;
+}
+
+/** How a primaryAction button behaves in the web preview (Kimi-authored per app). */
+export type PreviewActionKind =
+  | "open_detail"
+  | "compose_message"
+  | "update_status"
+  | "navigate_tab"
+  | "save";
+
+export interface PreviewActionRule {
+  /** Matches primaryAction label (case-insensitive contains). */
+  match: string;
+  kind: PreviewActionKind;
+  toast: string;
+  navigateTabId?: string;
+  statusBadge?: string;
+  statusMeta?: string;
+  nextPrimaryAction?: string;
+  detailAppend?: string;
+  composeTitle?: string;
+  openDetailAfter?: boolean;
+}
+
+export interface PreviewActionPlan {
+  messagingTabId?: string;
+  feedTabId?: string;
+  rules: PreviewActionRule[];
 }
 
 export interface ExpoHomeSection {
@@ -90,6 +159,12 @@ export interface ExpoAppCapabilities {
 export interface ExpoAppModel {
   version: 1;
   category: string;
+  /** Role selection + setup wizard (when marketplace / dual-sided). */
+  flow?: ExpoAppFlow;
+  /** Post-build summary for build room chat. */
+  buildRecap?: ExpoBuildRecap;
+  /** Kimi-reviewed button outcomes for this specific app. */
+  previewActions?: PreviewActionPlan;
   tabs: ExpoTab[];
   onboarding: ExpoOnboardingSlide[];
   home: {
@@ -99,6 +174,17 @@ export interface ExpoAppModel {
     heroSublabel: string;
     sections: ExpoHomeSection[];
   };
+  /** Per-role home when flow.roles exists — keys match role.id */
+  homeByRole?: Record<
+    string,
+    {
+      headline: string;
+      subheadline: string;
+      heroLabel: string;
+      heroSublabel: string;
+      sections: ExpoHomeSection[];
+    }
+  >;
   tabScreens: Record<string, ExpoTabScreen>;
   profile: {
     displayName: string;

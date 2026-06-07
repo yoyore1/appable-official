@@ -1,3 +1,4 @@
+import type { AppCategory } from "@/lib/expoApp/inferCategory";
 import type { MasterBuildPrompt } from "@/lib/types";
 import {
   ONBOARDING_ARCHETYPE_GUIDE,
@@ -48,7 +49,10 @@ ${TOP_PREMIUM_LEVERS.map((l) => `- ${l}`).join("\n")}
 Preview mimics with CSS motion + confetti; device build uses full stack above.
 `.trim();
 
-export function psychologyHintsFor(mp: MasterBuildPrompt): string[] {
+export function psychologyHintsFor(
+  mp: MasterBuildPrompt,
+  category: AppCategory = "general"
+): string[] {
   const pack = onboardingPackForPrompt(mp);
   const hints: string[] = [
     `Onboarding archetype: ${pack.archetype} — ${ONBOARDING_ARCHETYPE_GUIDE[pack.archetype]}`,
@@ -62,9 +66,14 @@ export function psychologyHintsFor(mp: MasterBuildPrompt): string[] {
   });
 
   const blob = mp.description + mp.features.join(" ");
-  if (/recipe|cook|food|meal|kitchen/.test(blob)) {
+  if (category === "cooking" && /recipe|cook|food|meal|kitchen/.test(blob)) {
     hints.push(
       "Cooking: onboarding slide 1 should show camera/scan → real recipe result, not a tagline."
+    );
+  }
+  if (category === "pets") {
+    hints.push(
+      "Pets: onboarding slide 1 shows posting or browsing a walk request — real breed/area/budget on screen."
     );
   }
   if (/photo|camera|snap|scan/.test(blob)) {

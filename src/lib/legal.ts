@@ -1,9 +1,8 @@
 import type { MasterBuildPrompt } from "@/lib/types";
+import { inferCategory } from "@/lib/expoApp/inferCategory";
 
 /**
- * Free per-project legal/support docs. In production these are generated once
- * and stored in Supabase storage with a public URL; here they're rendered on
- * demand as standalone hosted HTML pages.
+ * Free per-project legal/support docs — tailored to app domain from the master prompt.
  */
 function shell(title: string, app: string, body: string): string {
   const year = new Date().getFullYear();
@@ -29,40 +28,130 @@ ${body}
 </div></body></html>`;
 }
 
+function dataCollected(category: ReturnType<typeof inferCategory>, features: string): string {
+  const base = `<li><strong>Account information</strong> — email, display name, and authentication identifiers when you create an account.</li>
+        <li><strong>Usage data</strong> — app interactions, crash logs, device type, and coarse analytics to improve reliability.</li>`;
+
+  if (category === "pets") {
+    return `${base}
+        <li><strong>Profile &amp; pet information</strong> — name, neighborhood, dog breed/size, and bio you enter during setup.</li>
+        <li><strong>Walk requests &amp; bookings</strong> — dates, locations, budgets, and messages between owners and walkers.</li>
+        <li><strong>Payment information</strong> — processed by our payment provider when you book walks (we do not store full card numbers).</li>
+        <li><strong>Location</strong> — approximate area you provide for matching walks; we do not track you in the background.</li>`;
+  }
+  if (category === "cooking") {
+    return `${base}
+        <li><strong>Content you provide</strong> — photos, recipes, lists, and preferences for features such as ${features}.</li>
+        <li><strong>Camera &amp; photos</strong> — only when you scan or upload images for recipes. Not accessed in the background.</li>`;
+  }
+  if (category === "fitness") {
+    return `${base}
+        <li><strong>Health &amp; workout data</strong> — workouts logged, goals, and progress you choose to save.</li>`;
+  }
+  if (category === "shopping") {
+    return `${base}
+        <li><strong>Orders &amp; cart</strong> — products saved, shipping preferences, and purchase history.</li>`;
+  }
+  if (category === "social") {
+    return `${base}
+        <li><strong>Posts &amp; messages</strong> — content you share, follow relationships, and communications in the app.</li>`;
+  }
+  return `${base}
+        <li><strong>Content you provide</strong> — material you create or upload while using ${features}.</li>`;
+}
+
+function aiSection(category: ReturnType<typeof inferCategory>): string {
+  if (category === "cooking") {
+    return `<h2>AI processing</h2>
+      <p>Some features send food photos you choose to AI providers to generate recipes or suggestions. Content is processed only to deliver the feature you requested.</p>`;
+  }
+  if (category === "pets") {
+    return `<h2>AI processing</h2>
+      <p>If we offer photo or text assistance, content is processed only to deliver the feature you requested — for example helping describe a dog or draft a walk note.</p>`;
+  }
+  return `<h2>AI processing</h2>
+      <p>Some features may send content you choose to AI providers to generate suggestions or complete tasks. That content is processed only to deliver the feature you requested.</p>`;
+}
+
+function termsDomain(category: ReturnType<typeof inferCategory>): string {
+  if (category === "pets") {
+    return `<li>Walkers and owners are independent users — we facilitate matching but do not employ walkers. Owners are responsible for their pets; walkers must follow local laws and owner instructions.</li>
+        <li>Do not misrepresent your identity, pet, or qualifications.</li>`;
+  }
+  if (category === "cooking") {
+    return `<li>Do not misrepresent AI-generated recipes as professional medical or dietary advice.</li>`;
+  }
+  return `<li>Use the app only for its intended purpose and in compliance with applicable laws.</li>`;
+}
+
+function contentLicense(category: ReturnType<typeof inferCategory>, app: string, features: string): string {
+  if (category === "pets") {
+    return `walk requests, messages, and profile information`;
+  }
+  if (category === "cooking") {
+    return `photos, recipes, and lists`;
+  }
+  return `content you submit related to ${features}`;
+}
+
+function supportFaq(category: ReturnType<typeof inferCategory>, app: string, f0: string): string {
+  if (category === "pets") {
+    return `<h2>Common questions</h2>
+    <ul>
+      <li><strong>How do I post a walk?</strong> Home → Post a walk request — add breed, area, time, and budget.</li>
+      <li><strong>How do walkers get paid?</strong> Profile → Payment to add a payout method. Owners pay when a walk is booked.</li>
+      <li><strong>Can I message before booking?</strong> Yes — open a walker profile or request and tap Message.</li>
+      <li><strong>Is my data private?</strong> See our <a href="privacy">Privacy Policy</a>.</li>
+    </ul>`;
+  }
+  if (category === "cooking") {
+    return `<h2>Common questions</h2>
+    <ul>
+      <li><strong>How do I save a recipe?</strong> Open a recipe and tap <em>Save</em>.</li>
+      <li><strong>How do I add to a shopping list?</strong> Recipe detail → <em>Add to shopping list</em>.</li>
+      <li><strong>Is my data private?</strong> See our <a href="privacy">Privacy Policy</a>.</li>
+    </ul>`;
+  }
+  return `<h2>Common questions</h2>
+    <ul>
+      <li><strong>How do I get started?</strong> Complete onboarding, then try ${f0} on Home.</li>
+      <li><strong>How do I save items?</strong> Open any card and tap Save.</li>
+      <li><strong>Is my data private?</strong> See our <a href="privacy">Privacy Policy</a>.</li>
+    </ul>`;
+}
+
 export function legalDoc(
   doc: "privacy" | "terms" | "support",
   mp: MasterBuildPrompt
 ): string {
   const app = mp.appName;
   const features = mp.features.join(", ");
+  const category = inferCategory(mp);
+  const f0 = mp.features[0] ?? "your core feature";
 
   if (doc === "privacy") {
     return shell("Privacy Policy", app, `
       <p><strong>Effective date:</strong> ${new Date().toISOString().slice(0, 10)}</p>
-      <p>${app} ("we," "us") respects your privacy. This policy describes what we collect, why we collect it, and the choices you have. It applies to the ${app} mobile application and related services built for ${mp.audience.toLowerCase()}.</p>
+      <p>${app} ("we," "us") respects your privacy. This policy describes what we collect, why we collect it, and the choices you have. It applies to the ${app} mobile application built for ${mp.audience.toLowerCase()}.</p>
 
       <h2>Information we collect</h2>
       <ul>
-        <li><strong>Account information</strong> — email, display name, and authentication identifiers when you create an account.</li>
-        <li><strong>Content you provide</strong> — photos, recipes, lists, preferences, and other material you upload while using features such as ${features}.</li>
-        <li><strong>Usage data</strong> — app interactions, crash logs, device type, and coarse analytics to improve reliability and performance.</li>
-        <li><strong>Camera &amp; photos</strong> — only when you explicitly scan or upload images (e.g. meal photos for recipes). We do not access your library in the background.</li>
+        ${dataCollected(category, features)}
       </ul>
 
       <h2>How we use information</h2>
-      <p>We use your data to operate ${app}, personalize results for ${mp.audience.toLowerCase()}, provide core features (${features}), prevent abuse, and improve the product. We do not sell your personal information.</p>
+      <p>We use your data to operate ${app}, deliver features (${features}), personalize the experience for ${mp.audience.toLowerCase()}, prevent abuse, and improve the product. We do not sell your personal information.</p>
 
-      <h2>AI processing</h2>
-      <p>Some features send content you choose (such as food photos) to AI providers to generate recipes or suggestions. That content is processed only to deliver the feature you requested and is not used to train public models without your consent.</p>
+      ${aiSection(category)}
 
       <h2>Sharing</h2>
-      <p>We may share data with infrastructure providers (hosting, analytics, AI APIs) under contracts that require them to protect your information. We may disclose data if required by law or to protect users and the service.</p>
+      <p>We may share data with infrastructure providers (hosting, analytics, payment, AI APIs) under contracts that require them to protect your information. We may disclose data if required by law or to protect users and the service.</p>
 
       <h2>Retention &amp; deletion</h2>
-      <p>We keep account data while your account is active. You may request deletion of your account and associated content via the Support page. Backups may persist for up to 30 days after deletion.</p>
+      <p>We keep account data while your account is active. You may request deletion via the Support page. Backups may persist for up to 30 days after deletion.</p>
 
       <h2>Children</h2>
-      <p>${app} is not directed to children under 13. We do not knowingly collect data from children.</p>
+      <p>${app} is not directed to children under 13.</p>
 
       <h2>Contact</h2>
       <p>Privacy questions: use the <a href="support">Support page</a> for this app.</p>`);
@@ -71,36 +160,30 @@ export function legalDoc(
   if (doc === "terms") {
     return shell("Terms of Service", app, `
       <p><strong>Effective date:</strong> ${new Date().toISOString().slice(0, 10)}</p>
-      <p>These Terms of Service ("Terms") govern your use of ${app}. By creating an account or using the app, you agree to these Terms.</p>
+      <p>These Terms govern your use of ${app}. By creating an account or using the app, you agree to these Terms.</p>
 
       <h2>Using ${app}</h2>
       <p>You must use the app lawfully and in line with its purpose: ${mp.description}</p>
       <ul>
         <li>Do not upload illegal, harmful, or infringing content.</li>
         <li>Do not attempt to reverse-engineer, scrape, or disrupt the service.</li>
-        <li>Do not misrepresent AI-generated recipes as professional medical or dietary advice.</li>
+        ${termsDomain(category)}
       </ul>
 
       <h2>Your content</h2>
-      <p>You retain ownership of photos, recipes, and other content you submit. You grant us a limited license to host, process, and display that content solely to operate ${app} and its features (${features}).</p>
+      <p>You retain ownership of content you submit. You grant us a limited license to host, process, and display ${contentLicense(category, app, features)} solely to operate ${app}.</p>
 
       <h2>AI-generated output</h2>
-      <p>Recipes and suggestions may be generated by AI and can be inaccurate. Always verify ingredients, allergens, and cooking safety. ${app} is provided for home cooking inspiration, not professional nutrition or medical guidance.</p>
+      <p>Suggestions generated by AI may be inaccurate. Always verify important details before relying on them.</p>
 
-      <h2>Subscriptions &amp; payments</h2>
-      <p>If paid features are offered, pricing and billing terms will be shown before purchase. Unless stated otherwise, subscriptions renew automatically until cancelled in your app store settings.</p>
+      <h2>Payments</h2>
+      <p>If the app includes bookings or purchases, pricing and billing terms are shown before you pay. Subscriptions renew until cancelled in your app store settings where applicable.</p>
 
       <h2>Disclaimer</h2>
-      <p>${app} is provided <em>"as is"</em> without warranties of any kind. We do not guarantee uninterrupted or error-free operation.</p>
-
-      <h2>Limitation of liability</h2>
-      <p>To the fullest extent permitted by law, we are not liable for indirect, incidental, or consequential damages arising from your use of the app.</p>
-
-      <h2>Changes</h2>
-      <p>We may update these Terms. Material changes will be communicated in-app or by email. Continued use after changes means you accept the updated Terms.</p>
+      <p>${app} is provided <em>"as is"</em> without warranties of any kind.</p>
 
       <h2>Contact</h2>
-      <p>Questions about these Terms: see the Support page for ${app}.</p>`);
+      <p>Questions: see the Support page for ${app}.</p>`);
   }
 
   return shell("Support", app, `
@@ -108,23 +191,16 @@ export function legalDoc(
 
     <h2>Getting started</h2>
     <ul>
-      <li><strong>First launch</strong> — complete the short onboarding, then try the main action on Home (${mp.features[0] ?? "your core feature"}).</li>
-      <li><strong>Recipes &amp; lists</strong> — open any recipe for full steps; use <em>Add to shopping list</em> to send ingredients to Lists.</li>
-      <li><strong>Scan</strong> — use camera or photo upload to get AI-powered results (requires network).</li>
+      <li><strong>First launch</strong> — ${category === "pets" ? "pick Dog owner or Dog walker, complete your profile, then browse or post walks." : `complete onboarding, then try ${f0} on Home.`}</li>
+      <li><strong>Core features</strong> — ${features}.</li>
     </ul>
 
-    <h2>Common questions</h2>
-    <ul>
-      <li><strong>How do I save a recipe?</strong> Open a recipe and tap <em>Save</em>. Saved count updates in Profile.</li>
-      <li><strong>How do I edit dietary preferences?</strong> Profile → Dietary preferences.</li>
-      <li><strong>Is my data private?</strong> See our <a href="privacy">Privacy Policy</a>.</li>
-      <li><strong>AI looks wrong</strong> — try another photo or edit ingredients manually; AI output is a starting point.</li>
-    </ul>
+    ${supportFaq(category, app, f0)}
 
     <h2>Report a problem</h2>
-    <p>Include your device model, iOS/Android version, and what you were doing when the issue occurred. Screenshots help.</p>
+    <p>Include your device model, OS version, and what you were doing. Screenshots help.</p>
     <p>Email: <a href="mailto:support@${app.toLowerCase().replace(/[^a-z0-9]/g, "")}.app">support@${app.toLowerCase().replace(/[^a-z0-9]/g, "")}.app</a></p>
 
     <h2>Response time</h2>
-    <p>We aim to reply within 2 business days for free-tier apps. Urgent safety issues (allergens, account access) are prioritized.</p>`);
+    <p>We aim to reply within 2 business days.</p>`);
 }

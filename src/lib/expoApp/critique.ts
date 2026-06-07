@@ -1,5 +1,8 @@
 import { isOnboardingSlogan } from "@/lib/expo/onboardingPack";
 import { itemHasContentDetail } from "./genericDetails";
+import type { InterviewTurn, MasterBuildPrompt } from "@/lib/types";
+import { collectTopologyGaps } from "./enforceProductShape";
+import { buildFeaturePlan } from "./featurePlan";
 import type { AppCategory } from "./inferCategory";
 import type { ExpoAppModel, ExpoAppModelInput } from "./types";
 
@@ -35,7 +38,11 @@ function checkItems(
   }
 }
 
-export function critiqueExpoApp(input: ExpoAppModel | ExpoAppModelInput): CritiqueResult {
+export function critiqueExpoApp(
+  input: ExpoAppModel | ExpoAppModelInput,
+  interview: InterviewTurn[] = [],
+  mp?: { description: string; audience: string; features: string[]; appName: string; twist?: string | null }
+): CritiqueResult {
   const issues: string[] = [];
 
   if (!input.onboarding || input.onboarding.length < 2) {
@@ -80,13 +87,26 @@ export function critiqueExpoApp(input: ExpoAppModel | ExpoAppModelInput): Critiq
     issues.push("Profile needs settings rows");
   }
 
-  const isCooking =
-    input.category === "cooking" ||
-    /recipe|cook|food|meal|kitchen/i.test(
-      [input.home?.headline, input.home?.subheadline].filter(Boolean).join(" ")
-    );
+  const planCategory =
+    mp != null
+      ? buildFeaturePlan(
+          {
+            appName: mp.appName,
+            description: mp.description,
+            audience: mp.audience,
+            twist: mp.twist ?? null,
+            features: mp.features,
+            layoutArchetype: "",
+            vibe: "Minimal",
+            colors: "",
+            screens: [],
+            referenceApp: null,
+          },
+          interview
+        ).category
+      : ((input.category ?? "general") as AppCategory);
 
-  if (isCooking) {
+  if (planCategory === "cooking") {
     const hasRecipesTab = Object.keys(input.tabScreens ?? {}).some((id) =>
       /recipe/i.test(id)
     );
@@ -95,7 +115,21 @@ export function critiqueExpoApp(input: ExpoAppModel | ExpoAppModelInput): Critiq
     }
   }
 
-  const category = (input.category ?? "general") as AppCategory;
+  const category = (input.category ?? planCategory) as AppCategory;
+
+  if (planCategory === "pets") {
+    const hasCookingLeak = Object.keys(input.tabScreens ?? {}).some((id) =>
+      /recipe/i.test(id)
+    );
+    if (hasCookingLeak) {
+      issues.push('Pet app must NOT have a "recipes" tab — use walks/messages instead');
+    }
+    for (const it of input.home?.sections?.flatMap((s) => s.items) ?? []) {
+      if (it.detailType === "recipe" || (it.ingredients?.length ?? 0) > 0) {
+        issues.push(`"${it.title}" has recipe content — use walk/booking detail instead`);
+      }
+    }
+  }
   const collectionTab = input.tabs?.find((t) =>
     /list|grocery|cart|plan|library|shop|task/i.test(`${t.id} ${t.label}`)
   )?.id;
@@ -116,6 +150,11 @@ export function critiqueExpoApp(input: ExpoAppModel | ExpoAppModelInput): Critiq
         issues.push(`Tab "${tabId}": "${it.title}" needs full detail (body + steps)`);
       }
     }
+  }
+
+  if (mp) {
+    const fullMp = mp as MasterBuildPrompt;
+    issues.push(...collectTopologyGaps(input, fullMp, interview));
   }
 
   return { pass: issues.length === 0, issues };

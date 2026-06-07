@@ -3,12 +3,20 @@
  * relevant env vars are set, and otherwise returns a believable MOCK result so
  * the product is fully clickable with no API keys.
  *
- * - chat model (Step 3.5) → interview acks, ASO copy
- * - plan model (Kimi K2.6) → master-prompt synthesis after interview
+ * - chat model (Step 3.5) → ASO copy, tweak chat
+ * - plan model (Kimi K2.6) → interview acks, suggestions, master-prompt synthesis
  * - image model           → launch-pack screenshots + icon
  * - video model           → launch-pack video ad specs (stub)
  */
 import { chatModel, integrations, planModel } from "@/lib/config";
+import { APPABLE_PICK } from "@/lib/interviewSuggestions";
+import {
+  interviewAiAck,
+  interviewAiRecommend,
+  interviewAiSuggestions,
+  isGenericInterviewAck,
+} from "@/lib/interviewAi";
+import { interviewLlmProvider } from "@/lib/config";
 import {
   inferArchetypeFromInterview,
   inferFromReference,
@@ -49,8 +57,8 @@ async function chatComplete(
     timeoutMs?: number;
   } = {},
   endpoint: ModelEndpoint = chatModel
-): Promise<string> {
-  if (!endpoint.baseUrl || !endpoint.key) return "";
+): Promise<{ text: string; costUsd: number }> {
+  if (!endpoint.baseUrl || !endpoint.key) return { text: "", costUsd: 0 };
   const url = `${endpoint.baseUrl.replace(/\/$/, "")}/chat/completions`;
   const controller = new AbortController();
   const timeoutMs = opts.timeoutMs ?? 45_000;
@@ -80,16 +88,19 @@ async function chatComplete(
         `[chatComplete] ${res.status}`,
         errBody.slice(0, 300)
       );
-      return "";
+      return { text: "", costUsd: 0 };
     }
     const data = await res.json();
+    const { parseDeepInfraCost } = await import("@/lib/deepinfraCost");
+    const { trackLlmCost } = await import("@/lib/aiBillingContext");
+    const costUsd = parseDeepInfraCost(data);
+    trackLlmCost(costUsd);
     const msg = data?.choices?.[0]?.message;
     const text = (msg?.content ?? "").trim();
-    // Step-3.5 sometimes leaves content empty; never surface raw reasoning to users.
-    return text;
+    return { text, costUsd };
   } catch (err) {
     console.error("[chatComplete] failed:", err);
-    return "";
+    return { text: "", costUsd: 0 };
   } finally {
     clearTimeout(timer);
   }
@@ -134,6 +145,14 @@ const ACK_CONTEXT: Record<string, string> = {
   followup_idea: "They gave a concrete first-use example.",
   followup_features: "They described the step-by-step core flow.",
   followup_recipe_depth: "They said how detailed recipes should be.",
+  followup_clarify_idea: "They clarified how the app should work.",
+  followup_clarify_audience: "They clarified who the app is for.",
+  followup_clarify_features: "They clarified the core flow.",
+  pool_who: "They said who the app is for.",
+  pool_core_loop: "They listed what the app does.",
+  pool_rules: "They set hard rules for the app.",
+  pool_proof: "They explained how verification works.",
+  pool_first_use: "They described the first-use experience.",
   followup_twist: "They named their key differentiator.",
 };
 
@@ -258,16 +277,16 @@ function capitalizeFirst(s: string): string {
   return s.charAt(0).toUpperCase() + s.slice(1);
 }
 
-/** Pull a concrete hook phrase from their words (not a truncated sentence). */
-function hookPhrase(answer: string): string {
+/** Short semantic label for acks — never a chopped copy of their sentence. */
+function semanticHook(answer: string): string {
   const a = answer.toLowerCase();
   const pairs: [RegExp, string][] = [
     [/dog\s*walk|walker|pet\s*sit|dog\s*sit/, "dog walkers"],
     [/connect|match|link/, "connecting people"],
     [/area|location|nearby|local|neighborhood|zip/, "by area"],
     [/flight|travel|trip/, "finding flights"],
-    [/recipe|dish|meal|cook/, "recipes"],
-    [/photo|camera|snap|picture/, "from a photo"],
+    [/recipe|dish|meal|cook|food/, "recipes"],
+    [/\bpic\b|\bphoto\b|camera|snap|picture|upload.*image/, "photo-first"],
     [/book|appointment|schedule/, "booking"],
     [/streak|habit|daily/, "daily habits"],
     [/chat|message|dm/, "messaging"],
@@ -276,8 +295,12 @@ function hookPhrase(answer: string): string {
   for (const [re, phrase] of pairs) {
     if (re.test(a)) return phrase;
   }
-  const bit = answerSnippet(answer, 40);
-  return bit.length > 6 ? bit : "";
+  return "";
+}
+
+/** @deprecated Use semanticHook — never echo truncated user text in acks. */
+function hookPhrase(answer: string): string {
+  return semanticHook(answer);
 }
 
 /** Personal warm texting line — varied, tied to what they actually said. */
@@ -306,11 +329,21 @@ function warmFromAnswer(
         "Connecting nearby instead of random — smart angle.",
       ]);
     }
-    if (/recipe|dish|food|meal|cook/.test(a) && /photo|pic|camera|snap|picture/.test(a)) {
+    if (
+      /recipe|dish|food|meal|cook|ingredient/.test(a) &&
+      /\bpic\b|\bphoto\b|camera|snap|picture/.test(a)
+    ) {
       return hashPick(seed, [
         "Wait snap a dish and get the recipe?? That's so useful.",
         "Photo → recipe is one of those ideas that just clicks.",
         "Okay yeah I'd use that every time I'm at a restaurant.",
+      ]);
+    }
+    if (/\bpic\b|\bphoto\b|camera|snap|picture|upload.*(pic|photo|image)/.test(a)) {
+      return hashPick(seed, [
+        "Okay so the camera is the core move — that's a really clear hook.",
+        "Wait photo-first apps hit different when the flow is obvious — I'm into it.",
+        "Yeah take a pic and the app does the rest — I can picture that.",
       ]);
     }
     if (/flight|travel|trip|hotel/.test(a)) {
@@ -336,9 +369,9 @@ function warmFromAnswer(
     }
     if (hook) {
       return hashPick(seed, [
-        `Wait ${hook} — that's actually a really clear idea.`,
-        `Okay ${hook} — I can totally picture the app.`,
-        `${capitalizeFirst(hook)} — yeah that could be really good.`,
+        `Wait — ${hook} is actually a really clear angle.`,
+        `Okay yeah ${hook} — I can totally picture the app.`,
+        `${capitalizeFirst(hook)} — that could be really good.`,
       ]);
     }
     return hashPick(seed, [
@@ -460,6 +493,14 @@ function warmFromAnswer(
   }
 
   if (questionId.startsWith("followup_")) {
+    const bit = answerSnippet(answer, 52);
+    if (bit.length > 10) {
+      return hashPick(seed, [
+        `Okay — ${bit}. That'll shape the build.`,
+        `Got it — locking in ${bit}.`,
+        `Yeah ${bit} — noted for the build.`,
+      ]);
+    }
     return "Yeah that detail will shape the build.";
   }
 
@@ -531,66 +572,65 @@ export async function chatReply(
   maxTokens = 140
 ): Promise<string> {
   if (!integrations.chatModel) return "";
-  return chatComplete(
+  const { text } = await chatComplete(
     [
       { role: "system", content: system },
       { role: "user", content: user },
     ],
     { temperature: 0.75, maxTokens, timeoutMs: 20_000 }
   );
+  return text;
 }
 
+function interviewLlmReady(): boolean {
+  return interviewLlmProvider === "kimi"
+    ? integrations.planModel
+    : integrations.chatModel;
+}
+
+/** @deprecated Spine steps skip acks — use ackForAppablePick when they tap Let Appable pick. */
 export async function interviewAck(
   prevAnswer: string,
   questionId: string,
   priorInterview: InterviewTurn[] = []
 ): Promise<string[]> {
-  if (
-    (questionId === "features" || questionId === "followup_features") &&
-    hasDetailedFlow(prevAnswer)
-  ) {
-    return [flowAck(`${questionId}:${prevAnswer}`, prevAnswer)];
+  return ackForAppablePick(prevAnswer, questionId, priorInterview);
+}
+
+/** One-line echo after Let Appable pick — not a filler ack before every question. */
+export function ackForAppablePick(
+  resolvedAnswer: string,
+  questionId: string,
+  priorInterview: InterviewTurn[] = []
+): string[] {
+  const line = warmFromAnswer(questionId, resolvedAnswer, priorInterview).trim();
+  return line ? [line] : [];
+}
+
+/** Suggestion pills — LLM reads full interview; no category templates. */
+export async function interviewSuggestionsForStep(
+  stepId: string,
+  stepPrompt: string,
+  interview: InterviewTurn[]
+): Promise<string[]> {
+  if (interviewLlmReady()) {
+    return interviewAiSuggestions(stepId, stepPrompt, interview);
   }
+  return [APPABLE_PICK];
+}
 
-  const ctx = ACK_CONTEXT[questionId] ?? "They replied to your question.";
-  const prior = interviewContextLines(
-    priorInterview.filter((t) => t.questionId !== questionId)
-  );
-
-  if (integrations.chatModel) {
-    const warm = await chatComplete(
-      [
-        {
-          role: "system",
-          content:
-            "You're a friend texting about their app idea. Reply with ONE short message (8–18 words). " +
-            "React to ONE specific detail they said — reuse their words or a clear paraphrase. " +
-            "Sound surprised, curious, or genuinely into it. Never generic filler.\n\n" +
-            `${ctx}\n\n` +
-            (prior
-              ? `Interview so far:\n${prior}\n\n`
-              : "") +
-            "GOOD: \"post breed + area + pay then walkers apply?? clean loop\", " +
-            "\"works both ways for owners and walkers — smart\"\n" +
-            "BAD: \"I kind of love that\", quoting their first few words back, " +
-            "\"that's the heart of the X thing\", filler, analysis, or asking the next question.\n" +
-            (questionId === "followup_features"
-              ? "They described a step-by-step flow — react to how it works end-to-end, not just step one."
-              : ""),
-        },
-        {
-          role: "user",
-          content: `Their latest answer (${questionId}): ${prevAnswer}`,
-        },
-      ],
-      { temperature: 0.92, maxTokens: 72, timeoutMs: 12_000 }
-    );
-    if (warm) {
-      return [sanitizeWarmLine(warm, questionId, prevAnswer, priorInterview)];
-    }
+/** Resolve "Let Appable pick" from full interview context. */
+export async function interviewResolvePick(
+  stepId: string,
+  stepPrompt: string,
+  interview: InterviewTurn[]
+): Promise<string> {
+  if (interviewLlmReady()) {
+    const picked = await interviewAiRecommend(stepId, stepPrompt, interview);
+    if (picked) return picked;
   }
-
-  return [warmFromAnswer(questionId, prevAnswer, priorInterview)];
+  const { resolveInterviewAnswer } = await import("@/lib/interviewSuggestions");
+  return resolveInterviewAnswer(stepId as import("@/lib/interviewFlow").InterviewStepId, APPABLE_PICK, interview);
 }
 
 /**
@@ -606,10 +646,9 @@ export async function generateMasterPrompt(
     : null;
   const twist = referencePath ? answerFor(interview, "twist").trim() : null;
   const idea = answerFor(interview, "idea");
-  const audienceRaw = referencePath
-    ? (twist ?? "")
-    : answerFor(interview, "audience");
-  const featuresRaw = referencePath ? "" : answerFor(interview, "features");
+  const { resolvedAudience, resolvedFeatures } = await import("./interviewPlan");
+  const audienceRaw = referencePath ? (twist ?? "") : resolvedAudience(interview);
+  const featuresRaw = referencePath ? "" : resolvedFeatures(interview);
   const appName = resolveAppName(interview);
   const vibe = resolveVibe(interview);
   const colors = resolveColors(answerFor(interview, "colors"), interview);
@@ -636,7 +675,8 @@ export async function generateMasterPrompt(
     "Everyday people who want something simple and beautiful.";
 
   if (integrations.planModel) {
-    const content = await chatComplete(
+    const { planChatComplete } = await import("@/lib/planChat");
+    const { text: content } = await planChatComplete(
       [
         {
           role: "system",
@@ -647,9 +687,9 @@ export async function generateMasterPrompt(
             "marketplace-shop, booking-scheduling, content-library, habit-streak, journal-notes, " +
             "onboarding-heavy-utility), vibe (Cinematic|Minimal|Bold|Soft|Luxury), colors, " +
             "screens (array of 4-6 screen names), referenceApp (string or null). " +
-            "CRITICAL: features MUST reflect what the user actually asked for — keep their phrasing " +
-            "(e.g. 'detailed step-by-step recipes', 'photo to recipe', 'grocery lists'). " +
-            "description must incorporate their idea/twist verbatim where possible. " +
+            "CRITICAL: features MUST reflect what the user actually asked for — keep their phrasing from the interview. " +
+            "description must incorporate their idea/twist AND every dynamic follow-up answer verbatim where possible. " +
+            "Do NOT default to cooking/recipes unless the user explicitly described a food/cooking app. " +
             "NEVER use the referenced app's name as appName or copy its branding. " +
             "Use provided layoutArchetype when referencePath is true but OVERRIDE generic features with user text. JSON only.",
         },
@@ -670,11 +710,15 @@ export async function generateMasterPrompt(
             screens,
             description,
             dynamicFollowUps: dyn,
+            fullInterview: interview.map((t) => ({
+              questionId: t.questionId,
+              question: t.question,
+              answer: t.answer,
+            })),
           }),
         },
       ],
-      { json: false, temperature: 0.3, maxTokens: 1800, timeoutMs: 45_000 },
-      planModel
+      { temperature: 0.3, maxTokens: 1800, timeoutMs: 90_000 }
     );
     const parsed = parseJsonFromText<MasterBuildPrompt>(content);
     if (parsed?.appName) return normalizeMasterPrompt(parsed);
@@ -699,7 +743,7 @@ export async function generateAso(
   prompt: MasterBuildPrompt
 ): Promise<NonNullable<LaunchAssets["aso"]>> {
   if (integrations.chatModel) {
-    const content = await chatComplete(
+    const { text: content } = await chatComplete(
       [
         {
           role: "system",

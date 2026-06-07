@@ -1,6 +1,6 @@
 import { inferCategory, type AppCategory } from "./inferCategory";
 import type { ExpoAppModel } from "./types";
-import type { MasterBuildPrompt } from "@/lib/types";
+import type { InterviewTurn, MasterBuildPrompt } from "@/lib/types";
 
 /**
  * Free in-preview UI — inferred for EVERY app type.
@@ -92,6 +92,7 @@ export function inferUiFeatures(
   if (
     listy ||
     category === "cooking" ||
+    category === "pets" ||
     category === "productivity" ||
     category === "shopping" ||
     category === "fitness" ||
@@ -103,9 +104,12 @@ export function inferUiFeatures(
   return [...out];
 }
 
-export function buildPreviewUiConfig(mp: MasterBuildPrompt): PreviewUiConfig {
-  const category = inferCategory(mp);
-  const blob = blobFromMp(mp);
+export function buildPreviewUiConfig(
+  mp: MasterBuildPrompt,
+  interview: InterviewTurn[] = []
+): PreviewUiConfig {
+  const category = inferCategory(mp, interview);
+  const blob = [blobFromMp(mp), ...interview.map((t) => t.answer)].join(" ");
   return {
     category,
     features: inferUiFeatures(blob, category),

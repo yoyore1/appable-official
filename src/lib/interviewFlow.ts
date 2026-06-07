@@ -2,11 +2,11 @@ import { answerFor } from "@/lib/interviewHelpers";
 import type { InterviewTurn } from "@/lib/types";
 
 import {
-  DYNAMIC_ANCHOR,
   isDynamicStepId,
   resolveDynamicStep,
-  suggestDynamicFollowUp,
 } from "@/lib/dynamicInterview";
+import { resolveAdaptiveNextStep, estimateInterviewProgress } from "@/lib/interviewPlan";
+import { isPoolStepId, resolvePoolStep, type PoolQuestionId } from "@/lib/interviewQuestionPool";
 
 export type InterviewStepId =
   | "idea"
@@ -16,7 +16,15 @@ export type InterviewStepId =
   | "colors"
   | "followup_idea"
   | "followup_features"
-  | "followup_recipe_depth";
+  | "followup_recipe_depth"
+  | "followup_clarify_idea"
+  | "followup_clarify_audience"
+  | "followup_clarify_features"
+  | "pool_who"
+  | "pool_core_loop"
+  | "pool_rules"
+  | "pool_proof"
+  | "pool_first_use";
 
 export type InterviewPath = "full";
 
@@ -75,8 +83,14 @@ export function getStepById(
 ): InterviewStep | undefined {
   const spine = FULL_STEPS.find((s) => s.id === stepId);
   if (spine) return spine;
+  if (isPoolStepId(stepId)) {
+    return resolvePoolStep(stepId, interview) as InterviewStep;
+  }
   if (isDynamicStepId(stepId)) {
-    return resolveDynamicStep(stepId, interview) as InterviewStep;
+    return resolveDynamicStep(
+      stepId as import("@/lib/dynamicInterview").DynamicStepId,
+      interview
+    ) as InterviewStep;
   }
   return undefined;
 }
@@ -101,53 +115,31 @@ export function getNextStep(
 
 export function resolveNextStep(
   interview: InterviewTurn[],
-  answeredId: InterviewStepId
+  answeredId: InterviewStepId,
+  interviewPlan?: PoolQuestionId[] | null
 ): InterviewStep | null {
-  const answer = answerFor(interview, answeredId);
-
-  if (isDynamicStepId(answeredId)) {
-    const anchor = DYNAMIC_ANCHOR[answeredId];
-    return getNextSpineStep(interview, anchor);
-  }
-
-  const dynamic = suggestDynamicFollowUp(interview, answeredId, answer);
-  if (dynamic) return dynamic as InterviewStep;
-
-  return getNextSpineStep(interview, answeredId);
+  return resolveAdaptiveNextStep(interview, answeredId, interviewPlan);
 }
 
 export function isInterviewDone(
   interview: InterviewTurn[],
-  lastAnsweredId: InterviewStepId
+  lastAnsweredId: InterviewStepId,
+  interviewPlan?: PoolQuestionId[] | null
 ): boolean {
-  return resolveNextStep(interview, lastAnsweredId) === null;
+  return resolveNextStep(interview, lastAnsweredId, interviewPlan) === null;
 }
 
 export function getProgress(
   interview: InterviewTurn[],
-  activeStepId: InterviewStepId
+  activeStepId: InterviewStepId,
+  interviewPlan?: PoolQuestionId[] | null
 ): { current: number; total: number; path: InterviewPath } {
-  const spine = FULL_STEPS;
-  const dynamicAnswered = interview.filter((t) =>
-    isDynamicStepId(t.questionId)
-  ).length;
-  const total = spine.length + Math.min(2, dynamicAnswered + 1);
-
-  let current = 1;
-  if (isDynamicStepId(activeStepId)) {
-    const anchor = DYNAMIC_ANCHOR[activeStepId];
-    const anchorIdx = spine.findIndex((s) => s.id === anchor);
-    current = anchorIdx + 2 + dynamicAnswered;
-  } else {
-    const idx = spine.findIndex((s) => s.id === activeStepId);
-    current = Math.max(1, idx + 1 + dynamicAnswered);
-  }
-
-  return {
-    current: Math.min(current, total),
-    total,
-    path: "full",
-  };
+  const { current, total } = estimateInterviewProgress(
+    interview,
+    activeStepId,
+    interviewPlan
+  );
+  return { current, total, path: "full" };
 }
 
 /** @deprecated Reference cloning path removed — always false. */
@@ -156,9 +148,12 @@ export function isReferencePath(_interview: InterviewTurn[]): boolean {
 }
 
 /** Next spine step when `idea` was already answered on the landing page. */
-export function initialInterviewStep(interview: InterviewTurn[]): InterviewStep {
+export function initialInterviewStep(
+  interview: InterviewTurn[],
+  interviewPlan?: PoolQuestionId[] | null
+): InterviewStep {
   if (answerFor(interview, "idea")) {
-    return resolveNextStep(interview, "idea") ?? FULL_STEPS[1];
+    return resolveNextStep(interview, "idea", interviewPlan) ?? FULL_STEPS[1];
   }
   return INTERVIEW_START;
 }

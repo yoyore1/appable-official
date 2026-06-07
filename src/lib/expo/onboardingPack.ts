@@ -73,6 +73,7 @@ export function inferOnboardingArchetype(mp: MasterBuildPrompt): OnboardingArche
 
 function completionCta(mp: MasterBuildPrompt, category: string): string {
   const f0 = mp.features[0]?.toLowerCase() ?? "";
+  if (/pet|dog|walk/.test(category + f0)) return "Find a walker";
   if (/cook|recipe|food/.test(category + f0)) return "Let's cook";
   if (/workout|fitness|train/.test(category + f0)) return "Start training";
   if (/task|todo|productiv/.test(category + f0)) return "Open my tasks";

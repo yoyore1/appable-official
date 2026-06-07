@@ -116,6 +116,7 @@ export const db = {
       target: null,
       githubRepoUrl: null,
       expoAppModel: null,
+      aiUsageUsd: 0,
       createdAt: now(),
       updatedAt: now(),
     };

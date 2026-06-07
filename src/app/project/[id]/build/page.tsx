@@ -5,8 +5,6 @@ import { GuestNav } from "@/components/GuestNav";
 import { Interview, type InterviewBootstrap } from "@/components/Interview";
 import { answerFor } from "@/lib/interviewHelpers";
 import { initialInterviewStep } from "@/lib/interviewFlow";
-import { interviewAck } from "@/lib/models";
-import { suggestForStep } from "@/lib/interviewSuggestions";
 import { resolveProjectAccess } from "@/lib/projectAccess";
 import { getCurrentUser } from "@/lib/session";
 
@@ -22,7 +20,10 @@ export default async function BuildPage({ params }: { params: { id: string } }) 
   }
 
   const user = await getCurrentUser();
-  const initialStep = initialInterviewStep(project.interview);
+  const initialStep = initialInterviewStep(
+    project.interview,
+    project.interviewPlan
+  );
   const ideaAnswer = answerFor(project.interview, "idea");
 
   const initialBubbles: {
@@ -46,8 +47,7 @@ export default async function BuildPage({ params }: { params: { id: string } }) 
 
   let bootstrap: InterviewBootstrap | undefined;
   if (ideaAnswer) {
-    const acks = await interviewAck(ideaAnswer, "idea", project.interview);
-    bootstrap = { kind: "afterAnswer", acks, question: initialStep };
+    bootstrap = { kind: "afterAnswerPending", question: initialStep };
   } else if (initialBubbles.length === 0 && initialStep.id === "idea") {
     bootstrap = { kind: "firstQuestion", question: initialStep };
   }
@@ -73,7 +73,6 @@ export default async function BuildPage({ params }: { params: { id: string } }) 
             initialBubbles={initialBubbles}
             guestFlow={isGuest}
             initialProgress={progressStart}
-            initialSuggestions={suggestForStep(initialStep.id, project.interview)}
             bootstrap={bootstrap}
           />
         </div>

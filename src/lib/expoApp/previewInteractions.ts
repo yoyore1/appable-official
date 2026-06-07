@@ -8,10 +8,13 @@ import {
 
 export type { PreviewInteractionConfig, SettingBinding, SettingsKind };
 export {
+  applyRoleToModel,
   buildPreviewInteractionConfig,
   extractCollectionLines,
+  filterItemsForRole,
   isListsTab,
   primaryContentTab,
+  resolveHomeForRole,
   resolveTabScreen,
   statUsesSavedCount,
 } from "./smartInteractions";

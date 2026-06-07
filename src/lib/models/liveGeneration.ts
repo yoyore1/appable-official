@@ -3,7 +3,13 @@
  * Routes through DeepInfra + fal per the models-polish spec.
  */
 import { recordAiSpend } from "@/lib/aiSpend";
-import { canSpend, ESTIMATED_COST_USD, usageSnapshot } from "@/lib/aiUsage";
+import {
+  canSpend,
+  ESTIMATED_COST_USD,
+  publicUsageSnapshot,
+  usageSnapshot,
+} from "@/lib/aiUsage";
+import { trackLlmCost } from "@/lib/aiBillingContext";
 import {
   embedText,
   generateImage,
@@ -42,9 +48,8 @@ export type LiveGenerationResult =
 export function checkLiveGenerationBudget(
   user: Pick<UserAccount, "aiUsageUsd" | "ttsCharsUsed">,
   capability: string
-): LiveGenerationResult | { ok: true; task: ModelTask; estimatedUsd: number } {
+): LiveGenerationResult | { ok: true; task: ModelTask } {
   const task = routeModelForCapability(capability);
-  const estimatedUsd = ESTIMATED_COST_USD[task] ?? 0.01;
   if (!isTaskConfigured(task)) {
     return {
       ok: false,
@@ -65,7 +70,7 @@ export function checkLiveGenerationBudget(
         "You've used your free AI generations. Connect your own API key to keep going.",
     };
   }
-  return { ok: true, task, estimatedUsd };
+  return { ok: true, task };
 }
 
 async function dispatchTask(
@@ -84,11 +89,11 @@ async function dispatchTask(
   switch (task) {
     case "vision": {
       if (!input.imageUrl) throw new Error("imageUrl required for vision");
-      const output = await visionComplete({
+      const vision = await visionComplete({
         imageUrl: input.imageUrl,
         prompt: input.text ?? capability,
       });
-      return { output, costUsd: ESTIMATED_COST_USD.vision };
+      return { output: vision.text, costUsd: vision.costUsd };
     }
     case "image_gen": {
       const prompt = input.text ?? capability;
@@ -97,46 +102,46 @@ async function dispatchTask(
       if (!first) throw new Error("No image returned");
       return {
         output: first.dataUrl,
-        costUsd: ESTIMATED_COST_USD.image_gen,
+        costUsd: first.costUsd,
       };
     }
     case "speech_to_text": {
       if (!input.audioBase64) throw new Error("audioBase64 required for STT");
       const buf = Buffer.from(input.audioBase64, "base64");
-      const output = await transcribeAudio({
+      const stt = await transcribeAudio({
         audio: buf,
         mimeType: input.audioMimeType ?? "audio/mpeg",
       });
-      return { output, costUsd: ESTIMATED_COST_USD.speech_to_text };
+      return { output: stt.text, costUsd: stt.costUsd };
     }
     case "text_to_speech": {
       const text = input.text ?? capability;
       const tts = await synthesizeSpeech(text);
       return {
         output: tts.audioBase64 ?? tts.audioUrl ?? "Audio generated.",
-        costUsd: tts.costUsd ?? ESTIMATED_COST_USD.text_to_speech,
+        costUsd: tts.costUsd,
         ttsChars: tts.chars,
         audioUrl: tts.audioUrl ?? tts.audioBase64,
       };
     }
     case "embedding": {
       const text = input.text ?? capability;
-      const embeddings = await embedText(text);
+      const embedded = await embedText(text);
       return {
-        output: `Embedded ${embeddings.length} vector(s), dim ${embeddings[0]?.length ?? 0}.`,
-        costUsd: ESTIMATED_COST_USD.embedding,
-        embeddings,
+        output: `Embedded ${embedded.embeddings.length} vector(s), dim ${embedded.embeddings[0]?.length ?? 0}.`,
+        costUsd: embedded.costUsd,
+        embeddings: embedded.embeddings,
       };
     }
     case "rerank": {
       const query = input.text ?? capability;
       const docs = input.documents ?? [];
       if (!docs.length) throw new Error("documents required for rerank");
-      const rankings = await rerankDocuments(query, docs);
+      const ranked = await rerankDocuments(query, docs);
       return {
-        output: rankings[0]?.text ?? "",
-        costUsd: ESTIMATED_COST_USD.rerank,
-        rankings,
+        output: ranked.rankings[0]?.text ?? "",
+        costUsd: ranked.costUsd,
+        rankings: ranked.rankings,
       };
     }
     case "ad_video": {
@@ -147,10 +152,12 @@ async function dispatchTask(
         aspectRatio: "9:16",
         duration: "12",
       });
+      const costUsd = ESTIMATED_COST_USD.ad_video ?? 0.33;
+      trackLlmCost(costUsd);
       return {
         output: video.videoUrl,
         videoUrl: video.videoUrl,
-        costUsd: ESTIMATED_COST_USD.ad_video,
+        costUsd,
       };
     }
     default:
@@ -164,11 +171,13 @@ export async function runLiveGeneration(
   input: LiveGenerationInput = {}
 ): Promise<LiveGenerationResult> {
   const gate = checkLiveGenerationBudget(user, capability);
-  if (!("estimatedUsd" in gate)) return gate;
+  if (!("task" in gate)) return gate;
 
   try {
     const result = await dispatchTask(gate.task, capability, input);
-    await recordAiSpend(user.id, result.costUsd, result.ttsChars ?? 0);
+    if (result.costUsd > 0) {
+      await recordAiSpend(user.id, result.costUsd, result.ttsChars ?? 0);
+    }
     return {
       ok: true,
       task: gate.task,
@@ -187,4 +196,9 @@ export async function runLiveGeneration(
 
 export function userAiSnapshot(user: Pick<UserAccount, "aiUsageUsd" | "ttsCharsUsed">) {
   return usageSnapshot(user.aiUsageUsd, user.ttsCharsUsed);
+}
+
+/** Client-safe budget — percentages only. */
+export function userPublicAiUsage(user: Pick<UserAccount, "aiUsageUsd">) {
+  return publicUsageSnapshot(user.aiUsageUsd);
 }

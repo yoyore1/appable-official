@@ -85,7 +85,8 @@ export const LAYOUT_ARCHETYPES = {
     defaultScreens: ["Onboarding", "Browse", "Availability", "Booking confirm", "Profile"],
     tamaguiComponents: ["Calendar", "Card", "Button", "Sheet", "Select"],
     matchApps: ["calendly", "airbnb", "opentable", "doordash", "uber", "lyft", "classpass"],
-    matchKeywords: /book|schedule|appointment|reserve|calendar|slot|delivery|ride/i,
+    matchKeywords:
+      /book|schedule|appointment|reserve|calendar|slot|delivery|ride|dog walk|walker|pet sit|walk request/i,
   },
   "content-library": {
     label: "Content library",
@@ -260,7 +261,8 @@ export function inferArchetypeFromInterview(
   }
 
   if (bestScore === 0) {
-    if (/recipe|food|cook|meal|kitchen/.test(blob)) best = "content-library";
+    if (/dog|pet|walk|walker|sitter|paw/.test(blob)) best = "booking-scheduling";
+    else if (/recipe|food|cook|meal|kitchen/.test(blob)) best = "content-library";
     else if (/fitness|workout|gym|run/.test(blob)) best = "tracker-dashboard";
     else if (/friend|social|community|share/.test(blob)) best = "social-feed";
     else if (/shop|buy|product|store/.test(blob)) best = "marketplace-shop";

@@ -2,6 +2,7 @@ import {
   isDeferToRecommendation,
   profileFromInterview,
 } from "@/lib/designResearch";
+import { resolvedAudience, resolvedFeatures } from "@/lib/interviewPlan";
 import { suggestForStep } from "@/lib/interviewSuggestions";
 import type { InterviewTurn, Vibe } from "@/lib/types";
 
@@ -15,8 +16,8 @@ export function interviewContext(interview: InterviewTurn[]): string {
     answerFor(interview, "idea"),
     answerFor(interview, "twist"),
     answerFor(interview, "reference_name"),
-    answerFor(interview, "audience"),
-    answerFor(interview, "features"),
+    resolvedAudience(interview),
+    resolvedFeatures(interview),
   ]
     .filter(Boolean)
     .join(" ");

@@ -109,7 +109,7 @@ export const stripeConfig = {
 export const cheapTextModel = {
   baseUrl: env("CHAT_MODEL_BASE_URL"),
   key: env("CHAT_MODEL_KEY"),
-  name: env("CHAT_MODEL_NAME") ?? "stepfun-ai/Step-3.5-Flash",
+  name: env("CHAT_MODEL_NAME") ?? "Qwen/Qwen3.6-35B-A3B",
 };
 
 /** @deprecated alias */
@@ -122,6 +122,10 @@ export const appCodeModel = {
 };
 
 export const planModel = appCodeModel;
+
+/** Interview acks + pills: chat model (Qwen 3.6 default) or kimi (K2.6). Set INTERVIEW_MODEL=kimi to switch. */
+export const interviewLlmProvider: "flash" | "kimi" =
+  env("INTERVIEW_MODEL") === "kimi" ? "kimi" : "flash";
 
 export const visionModel = {
   baseUrl: deepinfra.openaiBase,

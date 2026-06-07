@@ -1,6 +1,10 @@
 import { profileFromInterview, recommendDesignProfile } from "@/lib/designResearch";
 import { hasDetailedFlow } from "@/lib/dynamicInterview";
 import { answerFor, interviewContext, suggestAppNameFromIdea } from "@/lib/interviewHelpers";
+import {
+  detectInterviewNiche,
+  ideaTailoredSuggestions,
+} from "@/lib/interviewUnderstanding";
 
 export { hasDetailedFlow };
 import type { InterviewStepId } from "@/lib/interviewFlow";
@@ -26,8 +30,13 @@ function ctx(interview: InterviewTurn[]): string {
 }
 
 function detectCategory(interview: InterviewTurn[]): AppCategory {
+  const niche = detectInterviewNiche(interview);
+  if (niche === "alarm-wake") return "habits";
+
   const c = ctx(interview);
-  if (/dog|pet|puppy|paw|walker|walk your|dog walk/.test(c)) return "dog-pets";
+  if (/dog|pet|puppy|paw|walker|walk your|dog walk|dog owner/.test(c)) {
+    return "dog-pets";
+  }
   if (/connect|match|marketplace|apply|gig|freelance|local|nearby|area/.test(c)) {
     return "marketplace";
   }
@@ -52,6 +61,9 @@ export function isAppablePick(answer: string): boolean {
 export function recommendAudience(interview: InterviewTurn[]): string {
   const cat = detectCategory(interview);
   const idea = answerFor(interview, "idea");
+  if (detectInterviewNiche(interview) === "alarm-wake") {
+    return "Heavy snoozers and early-shift workers who need a real wake-up";
+  }
 
   const byCat: Record<AppCategory, string> = {
     "dog-pets":
@@ -76,6 +88,9 @@ export function recommendAudience(interview: InterviewTurn[]): string {
 
 export function recommendFeatures(interview: InterviewTurn[]): string {
   const cat = detectCategory(interview);
+  if (detectInterviewNiche(interview) === "alarm-wake") {
+    return "Set alarm → must snap outside/sun photo to stop, no snooze, wake streaks";
+  }
 
   const byCat: Record<AppCategory, string> = {
     "dog-pets":
@@ -115,6 +130,9 @@ export function recommendName(interview: InterviewTurn[]): string {
 }
 
 function audienceSuggestions(interview: InterviewTurn[]): string[] {
+  const tailored = ideaTailoredSuggestions("audience", interview);
+  if (tailored) return [...tailored, APPABLE_PICK];
+
   const cat = detectCategory(interview);
   const byCat: Record<AppCategory, string[]> = {
     "dog-pets": [
@@ -140,6 +158,9 @@ function audienceSuggestions(interview: InterviewTurn[]): string[] {
 }
 
 function featuresSuggestions(interview: InterviewTurn[]): string[] {
+  const tailored = ideaTailoredSuggestions("features", interview);
+  if (tailored) return [...tailored, APPABLE_PICK];
+
   const cat = detectCategory(interview);
   const byCat: Record<AppCategory, string[]> = {
     "dog-pets": [
@@ -223,20 +244,105 @@ function ideaSuggestions(): string[] {
   ];
 }
 
-/** Tailored pills for the active question — each step builds on prior answers. */
 function isDynamicStep(stepId: string): boolean {
   return stepId.startsWith("followup_");
 }
 
+function followupIdeaSuggestions(interview: InterviewTurn[]): string[] {
+  const c = ctx(interview);
+  if (/dog|pet|walk|walker/.test(c)) {
+    return [
+      "Open app → post walk request → matched walker shows up",
+      "Browse nearby walks → apply → owner accepts you",
+      "Set your area & rates → get notified for new walks",
+      APPABLE_PICK,
+    ];
+  }
+  if (/recipe|food|cook|photo|snap/.test(c)) {
+    return [
+      "Snap a dish → get ingredients & steps instantly",
+      "Browse saved recipes → tap cook mode",
+      "Upload pantry photo → recipe ideas appear",
+      APPABLE_PICK,
+    ];
+  }
+  return [
+    "Open app → do the core action in one tap",
+    "Land on home → pick what you need → done",
+    "Sign up → guided first task in under a minute",
+    APPABLE_PICK,
+  ];
+}
+
+function followupFeaturesSuggestions(interview: InterviewTurn[]): string[] {
+  const c = ctx(interview);
+  if (/dog|pet|walk|walker|breed/.test(c)) {
+    return [
+      "Owner posts breed & pay → walkers apply → match → chat → walk done",
+      "Walker sets area → sees requests → applies → owner picks → walk",
+      "Either side posts → other browses → match → in-app chat & history",
+      APPABLE_PICK,
+    ];
+  }
+  return [
+    "Open → pick action → confirm → see result on home",
+    "Post what you need → others respond → pick one → message",
+    "Tap main button → fill quick form → done in one flow",
+    APPABLE_PICK,
+  ];
+}
+
+function followupRecipeDepthSuggestions(interview: InterviewTurn[]): string[] {
+  const c = ctx(interview);
+  if (/dog|pet|walk|walker|breed/.test(c)) {
+    return [
+      "Require breed, area & pay before walkers can apply",
+      "Walkers must verify ID; owners see walk history",
+      "Optional notes field — keep booking form minimal",
+      APPABLE_PICK,
+    ];
+  }
+  if (/recipe|food|cook|meal|kitchen/.test(c)) {
+    return [
+      "Full step-by-step + ingredient amounts required",
+      "Photo optional — short text recipe is fine",
+      "Skip nutrition unless user expands details",
+      APPABLE_PICK,
+    ];
+  }
+  if (/book|appointment|schedule/.test(c)) {
+    return [
+      "Name + time slot required; everything else optional",
+      "Cancel within 24h — no penalty",
+      "Providers set required fields per service type",
+      APPABLE_PICK,
+    ];
+  }
+  return [
+    "Keep signup to 3 fields max",
+    "Core action works without an account first",
+    "Require photo proof only for trust-critical steps",
+    APPABLE_PICK,
+  ];
+}
+
+/** @deprecated Pills come from LLM via interviewSuggestionsForStep — not category lists. */
 export function suggestForStep(
+  _stepId: InterviewStepId,
+  _interview: InterviewTurn[]
+): string[] {
+  return [APPABLE_PICK];
+}
+
+/** Idea-tailored pills when the LLM returns junk — still uses their interview, not generic copy. */
+export function fallbackSuggestionsForStep(
   stepId: InterviewStepId,
   interview: InterviewTurn[]
 ): string[] {
-  if (isDynamicStep(stepId)) return [];
+  const tailored = ideaTailoredSuggestions(stepId, interview);
+  if (tailored?.length) return [...tailored, APPABLE_PICK];
 
   switch (stepId) {
-    case "idea":
-      return ideaSuggestions();
     case "audience":
       return audienceSuggestions(interview);
     case "features":
@@ -245,8 +351,27 @@ export function suggestForStep(
       return nameSuggestions(interview);
     case "colors":
       return colorSuggestions(interview);
+    case "idea":
+      return ideaSuggestions();
+    case "followup_idea":
+      return followupIdeaSuggestions(interview);
+    case "followup_features":
+      return followupFeaturesSuggestions(interview);
+    case "followup_recipe_depth":
+      return followupRecipeDepthSuggestions(interview);
+    case "followup_clarify_idea":
+    case "followup_clarify_audience":
+    case "followup_clarify_features":
+    case "pool_who":
+    case "pool_core_loop":
+    case "pool_rules":
+    case "pool_proof":
+    case "pool_first_use":
+      return ideaTailoredSuggestions(stepId, interview)
+        ? [...(ideaTailoredSuggestions(stepId, interview) ?? []), APPABLE_PICK]
+        : [APPABLE_PICK];
     default:
-      return [];
+      return [APPABLE_PICK];
   }
 }
 
@@ -261,13 +386,39 @@ export function resolveInterviewAnswer(
 
   switch (stepId) {
     case "audience":
+    case "pool_who":
       return recommendAudience(interview);
     case "features":
+    case "pool_core_loop":
       return recommendFeatures(interview);
+    case "pool_rules":
+    case "pool_proof":
+      return (
+        fallbackSuggestionsForStep(stepId, interview).find(
+          (s) => s !== APPABLE_PICK
+        ) ?? trimmed
+      );
+    case "pool_first_use":
+      return (
+        fallbackSuggestionsForStep("followup_idea", interview).find(
+          (s) => s !== APPABLE_PICK
+        ) ?? trimmed
+      );
     case "name":
       return recommendName(interview);
     case "colors":
       return profileFromInterview(interview).colorsShort;
+    case "followup_idea":
+    case "followup_features":
+    case "followup_recipe_depth":
+    case "followup_clarify_idea":
+    case "followup_clarify_audience":
+    case "followup_clarify_features":
+      return (
+        fallbackSuggestionsForStep(stepId, interview).find(
+          (s) => s !== APPABLE_PICK
+        ) ?? trimmed
+      );
     case "idea":
       return trimmed;
     default:
