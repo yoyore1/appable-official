@@ -1,12 +1,35 @@
+import {
+  isDeferToRecommendation,
+  profileFromInterview,
+} from "@/lib/designResearch";
+import { suggestForStep } from "@/lib/interviewSuggestions";
 import type { InterviewTurn, Vibe } from "@/lib/types";
 
 export function answerFor(interview: InterviewTurn[], id: string): string {
   return interview.find((t) => t.questionId === id)?.answer ?? "";
 }
 
-/** Infer aesthetic from what they're building — no separate vibe question. */
+/** Text context for palette suggestions across both interview paths. */
+export function interviewContext(interview: InterviewTurn[]): string {
+  return [
+    answerFor(interview, "idea"),
+    answerFor(interview, "twist"),
+    answerFor(interview, "reference_name"),
+    answerFor(interview, "audience"),
+    answerFor(interview, "features"),
+  ]
+    .filter(Boolean)
+    .join(" ");
+}
+
+/** Infer vibe from app context (no separate vibe question). */
+export function resolveVibe(interview: InterviewTurn[]): Vibe {
+  return inferVibe(interview);
+}
+
+/** Infer aesthetic from what they're building when vibe wasn't picked. */
 export function inferVibe(interview: InterviewTurn[]): Vibe {
-  const ctx = `${answerFor(interview, "idea")} ${answerFor(interview, "audience")}`.toLowerCase();
+  const ctx = interviewContext(interview).toLowerCase();
 
   if (/luxury|fashion|jewel|premium|vip|exclusive|boutique/.test(ctx)) return "Luxury";
   if (/recipe|food|cook|meal|kitchen|grocery|mom|parent|family|baby|journal|calm|wellness|meditat|yoga|sleep/.test(ctx)) {
@@ -19,63 +42,30 @@ export function inferVibe(interview: InterviewTurn[]): Vibe {
   return "Minimal";
 }
 
-/** Palette chips shown above the colors question input. */
+/** @deprecated Use suggestForStep('colors', interview). */
 export function suggestColorOptions(interview: InterviewTurn[]): string[] {
-  const ctx = `${answerFor(interview, "idea")} ${answerFor(interview, "audience")}`.toLowerCase();
-
-  if (/recipe|food|cook|meal|kitchen|dish|grocery|ingredient/.test(ctx)) {
-    return ["Sage green & warm cream", "Terracotta & soft white", "Surprise me"];
-  }
-  if (/fitness|workout|health|run|gym|sport/.test(ctx)) {
-    return ["Electric teal & charcoal", "Coral energy & off-white", "Surprise me"];
-  }
-  if (/finance|money|bank|budget|invest|stock/.test(ctx)) {
-    return ["Deep navy & gold", "Forest green & cream", "Surprise me"];
-  }
-  if (/social|chat|friend|community|dating|connect/.test(ctx)) {
-    return ["Coral & warm sand", "Lavender & cream", "Surprise me"];
-  }
-  if (/kid|child|parent|mom|family|play|learn|student/.test(ctx)) {
-    return ["Sunny yellow & sky blue", "Peach & soft mint", "Surprise me"];
-  }
-  if (/photo|camera|video|film|creative|art/.test(ctx)) {
-    return ["Charcoal & coral accent", "Deep plum & cream", "Surprise me"];
-  }
-  return ["Coral & warm cream", "Sage & soft white", "Surprise me"];
+  return suggestForStep("colors", interview);
 }
 
-/** Map "surprise me" to a palette that fits the app. */
+/** Map optional / surprise picks to a palette that fits the app. */
 export function resolveColors(answer: string, interview: InterviewTurn[]): string {
   const a = answer.trim();
-  if (!/surprise|you pick|pick for me|idk|don't know|anything/i.test(a)) return a;
-
-  const ctx = `${answerFor(interview, "idea")} ${answerFor(interview, "audience")}`.toLowerCase();
-
-  if (/recipe|food|cook|meal|kitchen|dish|grocery/.test(ctx)) {
-    return "Sage green, warm cream, soft terracotta accents";
+  if (a && !isDeferToRecommendation(a) && !/no preference|skip|none/i.test(a)) {
+    return a;
   }
-  if (/fitness|workout|health|gym/.test(ctx)) {
-    return "Fresh teal, clean white, energetic coral highlights";
-  }
-  if (/finance|money|bank|budget/.test(ctx)) {
-    return "Deep navy, warm gold, clean off-white";
-  }
-  if (/social|chat|friend|community/.test(ctx)) {
-    return "Warm coral, soft sand, gentle lavender accents";
-  }
-  if (/kid|child|parent|mom|family|learn/.test(ctx)) {
-    return "Sunny yellow, sky blue, soft peach";
-  }
-  if (/photo|camera|video|creative|art/.test(ctx)) {
-    return "Charcoal, coral accent, warm cream";
-  }
-  return "Appable coral, warm cream, soft charcoal accents";
+  return profileFromInterview(interview).colors;
 }
 
 /** Suggest a real app name from the idea (avoids "TakeA" from "take a pic"). */
 export function suggestAppNameFromIdea(idea: string): string {
   const lower = idea.toLowerCase();
 
+  if (/dog|pet|walk|walker|paw/.test(lower)) {
+    const names = ["PawPath", "WalkMatch", "Neighborhood Paws"];
+    let h = 0;
+    for (const ch of idea) h = (h * 31 + ch.charCodeAt(0)) | 0;
+    return names[Math.abs(h) % names.length];
+  }
   if (/recipe|dish|food|cook|meal/.test(lower) && /photo|pic|camera|snap|picture|roll/.test(lower)) {
     return "SnapChef";
   }
@@ -107,9 +97,10 @@ export function suggestAppNameFromIdea(idea: string): string {
 export function resolveAppName(interview: InterviewTurn[]): string {
   const nameAnswer = answerFor(interview, "name").trim();
   const idea = answerFor(interview, "idea");
+  const twist = answerFor(interview, "twist");
 
   if (nameAnswer && !/suggest|you pick|name it|idk|don't know|pick one|surprise/i.test(nameAnswer)) {
     return nameAnswer.slice(0, 30).trim();
   }
-  return suggestAppNameFromIdea(idea);
+  return suggestAppNameFromIdea(idea || twist);
 }

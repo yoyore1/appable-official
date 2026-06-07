@@ -11,8 +11,6 @@ import {
 	BuildAppStep, BUILDING_STEPS, buildAppSteps, buildStepIndex, INTERVIEW_QUESTIONS, interviewAcks,
 	planWelcomeMessage, suggestColorOptions,
 } from '../../../../../../../workbench/contrib/void/common/appableInterview.js'
-import { IAppableLayoutService } from '../../../appableLayoutService.js'
-
 const C = {
 	cream: '#FDFAF4',
 	card: '#FFFFFF',
@@ -50,12 +48,9 @@ function sleep(ms: number) {
 
 export const AppableBuilder = ({
 	appableService,
-	layoutService,
 }: {
 	appableService: IAppableBuilderService
-	layoutService: IAppableLayoutService
 }) => {
-	const [advanced, setAdvanced] = useState(layoutService.isAdvanced)
 	const [phase, setPhase] = useState<Phase>('start')
 	const [messages, setMessages] = useState<Msg[]>([{
 		id: 0, role: 'ai',
@@ -93,15 +88,13 @@ export const AppableBuilder = ({
 					})
 				}
 				if (e.kind === 'error') { addMsg('ai', e.message, e.kind) }
-				else if (e.kind === 'detail' && layoutService.isAdvanced) { addMsg('ai', e.message, e.kind) }
 				return
 			}
-			if (e.kind === 'detail' && !layoutService.isAdvanced) { return }
+			if (e.kind === 'detail') { return }
 			addMsg('ai', e.message, e.kind)
 		})
-		const d2 = layoutService.onDidChangeAdvanced(setAdvanced)
-		return () => { d1.dispose(); d2.dispose() }
-	}, [appableService, layoutService])
+		return () => d1.dispose()
+	}, [appableService])
 
 	useEffect(() => {
 		scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: 'smooth' })
@@ -138,7 +131,7 @@ export const AppableBuilder = ({
 	}
 
 	const playAcks = async (questionId: keyof InterviewAnswers, answer: string) => {
-		const acks = interviewAcks(questionId, answer)
+		const acks = interviewAcks(questionId, answer, answersRef.current)
 		for (let i = 0; i < acks.length; i++) {
 			await sleep(i === 0 ? ACK_DELAY_MS : ACK_STAGGER_MS)
 			addMsg('ai', acks[i])
@@ -280,8 +273,6 @@ export const AppableBuilder = ({
 		}
 	}
 
-	const onToggleAdvanced = () => layoutService.toggleAdvanced()
-
 	const currentQuestion = phase === 'interview' ? INTERVIEW_QUESTIONS[qIndex] : null
 	const showColorChips = currentQuestion?.id === 'colors' && colorOptions.length > 0
 	const canBuild = (phase === 'ready' || phase === 'done') && !sending
@@ -313,9 +304,6 @@ export const AppableBuilder = ({
 							<span style={S.progressPct}>{displayPercent}%</span>
 						</div>
 					)}
-					<button type="button" onClick={onToggleAdvanced} style={advanced ? S.advBtnOn : S.advBtn}>
-						{advanced ? '← Simple view' : 'Advanced view'}
-					</button>
 				</div>
 				{phase === 'building' && (
 					<BuildProgressBar percent={displayPercent} appName={plan?.appName} />
@@ -349,7 +337,7 @@ export const AppableBuilder = ({
 				{phase === 'building' && (
 					<BuildingStepsCard steps={activeBuildSteps} stepIdx={buildStepIdx} />
 				)}
-				{result && <ResultCard result={result} advanced={advanced} />}
+				{result && <ResultCard result={result} />}
 			</div>
 
 			<div style={S.footer}>
@@ -456,7 +444,7 @@ const Bubble = ({ msg }: { msg: Msg }) => {
 	)
 }
 
-const ResultCard = ({ result, advanced }: { result: BuildResult; advanced: boolean }) => (
+const ResultCard = ({ result }: { result: BuildResult }) => (
 	<div style={{
 		marginTop: 8, background: C.card, border: `2px solid ${C.coral}`, borderRadius: 18,
 		padding: 18, boxShadow: '0 12px 32px rgba(232,84,59,0.14)',
@@ -468,13 +456,6 @@ const ResultCard = ({ result, advanced }: { result: BuildResult; advanced: boole
 			This is really yours — {result.fileCount} files, {result.compiled ? 'compiled and ready' : 'saved and waiting'}.
 			{result.shipPath === 'mac' ? ' Open in Xcode to run it.' : ' Follow the Codemagic steps to get it on your phone.'}
 		</div>
-		{advanced && (
-			<div style={{ fontFamily: 'ui-monospace, monospace', fontSize: 11, color: C.muted, background: C.cream, borderRadius: 11, padding: 11 }}>
-				<div>bundle: {result.bundleId}</div>
-				<div>folder: {result.projectDir}</div>
-				<div>mode: {result.mode} · fixes: {result.rounds}</div>
-			</div>
-		)}
 	</div>
 )
 
@@ -525,8 +506,6 @@ const S: Record<string, React.CSSProperties> = {
 	},
 	brand: { fontFamily: "'Clash Display', sans-serif", fontWeight: 700, fontSize: 18, letterSpacing: -0.3, lineHeight: 1.2 },
 	tagline: { fontSize: 12.5, color: C.muted, marginTop: 2, lineHeight: 1.35 },
-	advBtn: { padding: '7px 12px', borderRadius: 10, border: `1px solid ${C.line}`, background: C.card, color: C.muted, fontSize: 12, cursor: 'pointer', fontWeight: 500 },
-	advBtnOn: { padding: '7px 12px', borderRadius: 10, border: `1.5px solid ${C.coral}`, background: 'rgba(255,122,99,0.10)', color: C.coralDeep, fontSize: 12, cursor: 'pointer', fontWeight: 600 },
 	stream: { position: 'relative', zIndex: 1, flex: 1, minHeight: 0, minWidth: 0, overflowY: 'auto', overflowX: 'hidden', padding: '20px 18px 12px', display: 'flex', flexDirection: 'column', width: '100%' },
 	suggestRow: { display: 'flex', flexDirection: 'column', gap: 10, marginTop: 4, width: '100%' },
 	suggestCard: {

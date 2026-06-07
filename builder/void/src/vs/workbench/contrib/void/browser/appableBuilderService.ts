@@ -9,7 +9,7 @@ import { IChannel } from '../../../../base/parts/ipc/common/ipc.js';
 import { IMainProcessService } from '../../../../platform/ipc/common/mainProcessService.js';
 import { registerSingleton, InstantiationType } from '../../../../platform/instantiation/common/extensions.js';
 import {
-	APPABLE_CHANNEL, BuildOptions, BuildResult, ChatRequest, ChatResponse, IAppableBuilderService,
+	APPABLE_CHANNEL, BuildOptions, BuildResult, ChatRequest, ChatResponse, HandoffPayload, IAppableBuilderService,
 	InterviewAnswers, MasterBuildPrompt, ProgressEvent,
 } from '../common/appableBuilderTypes.js';
 
@@ -18,6 +18,7 @@ class AppableBuilderService extends Disposable implements IAppableBuilderService
 
 	private readonly channel: IChannel;
 	readonly onProgress: Event<ProgressEvent>;
+	readonly onHandoff: Event<HandoffPayload>;
 
 	constructor(
 		@IMainProcessService mainProcessService: IMainProcessService,
@@ -25,6 +26,7 @@ class AppableBuilderService extends Disposable implements IAppableBuilderService
 		super();
 		this.channel = mainProcessService.getChannel(APPABLE_CHANNEL);
 		this.onProgress = this.channel.listen<ProgressEvent>('onProgress');
+		this.onHandoff = this.channel.listen<HandoffPayload>('onHandoff');
 	}
 
 	build(opts: BuildOptions): Promise<BuildResult> {
@@ -41,6 +43,10 @@ class AppableBuilderService extends Disposable implements IAppableBuilderService
 
 	fetchPlan(projectId: string): Promise<MasterBuildPrompt> {
 		return this.channel.call<MasterBuildPrompt>('fetchPlan', projectId);
+	}
+
+	takePendingHandoff(): Promise<HandoffPayload | null> {
+		return this.channel.call<HandoffPayload | null>('takePendingHandoff');
 	}
 }
 

@@ -19,7 +19,13 @@ function SubmitButton({ label }: { label: string }) {
   );
 }
 
-export function AuthForm({ mode }: { mode: "signup" | "login" }) {
+export function AuthForm({
+  mode,
+  projectId,
+}: {
+  mode: "signup" | "login";
+  projectId?: string;
+}) {
   const action = mode === "signup" ? signUpAction : signInAction;
   const [state, formAction] = useFormState<AuthState, FormData>(action, null);
 
@@ -39,6 +45,9 @@ export function AuthForm({ mode }: { mode: "signup" | "login" }) {
       </div>
 
       <form action={formAction} className="space-y-3">
+        {projectId && (
+          <input type="hidden" name="projectId" value={projectId} />
+        )}
         {mode === "signup" && (
           <div>
             <label className="label" htmlFor="name">Your name</label>
@@ -75,9 +84,9 @@ export function AuthForm({ mode }: { mode: "signup" | "login" }) {
 
       <p className="text-center text-sm text-charcoal-soft">
         {mode === "signup" ? (
-          <>Already have an account? <Link href="/login" className="font-medium text-coral hover:underline">Sign in</Link></>
+          <>Already have an account? <Link href={projectId ? `/login?project=${projectId}` : "/login"} className="font-medium text-coral hover:underline">Sign in</Link></>
         ) : (
-          <>New here? <Link href="/signup" className="font-medium text-coral hover:underline">Create an account</Link></>
+          <>New here? <Link href={projectId ? `/signup?project=${projectId}` : "/signup"} className="font-medium text-coral hover:underline">Create an account</Link></>
         )}
       </p>
     </div>

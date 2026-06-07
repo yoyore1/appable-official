@@ -40,6 +40,8 @@ import { IViewsService } from '../../../services/views/common/viewsService.js';
 
 class AppableSidebarViewPane extends ViewPane {
 
+	private _mountHost: HTMLElement | undefined;
+
 	constructor(
 		options: IViewPaneOptions,
 		@IInstantiationService instantiationService: IInstantiationService,
@@ -58,21 +60,42 @@ class AppableSidebarViewPane extends ViewPane {
 
 	protected override renderBody(parent: HTMLElement): void {
 		super.renderBody(parent);
-		parent.style.userSelect = 'text'
-		parent.style.overflow = 'hidden'
-		parent.style.padding = '0'
-		parent.style.height = '100%'
+		parent.style.userSelect = 'text';
+		parent.style.overflow = 'hidden';
+		parent.style.padding = '0';
+		parent.style.height = '100%';
+		parent.style.width = '100%';
+		parent.style.display = 'flex';
+		parent.style.flexDirection = 'column';
+		parent.style.minHeight = '0';
+
+		const host = document.createElement('div');
+		host.style.flex = '1 1 auto';
+		host.style.height = '100%';
+		host.style.width = '100%';
+		host.style.minHeight = '0';
+		host.style.overflow = 'hidden';
+		parent.appendChild(host);
+		this._mountHost = host;
 
 		this.instantiationService.invokeFunction(accessor => {
-			const disposeFn: (() => void) | undefined = mountAppable(parent, accessor)?.dispose;
-			this._register(toDisposable(() => disposeFn?.()))
+			try {
+				const disposeFn: (() => void) | undefined = mountAppable(host, accessor)?.dispose;
+				this._register(toDisposable(() => disposeFn?.()));
+			} catch (e) {
+				console.error('[Appable Builder] mount failed:', e);
+			}
 		});
 	}
 
 	protected override layoutBody(height: number, width: number): void {
-		super.layoutBody(height, width)
-		this.element.style.height = `${height}px`
-		this.element.style.width = `${width}px`
+		super.layoutBody(height, width);
+		this.element.style.height = `${height}px`;
+		this.element.style.width = `${width}px`;
+		if (this._mountHost) {
+			this._mountHost.style.height = `${height}px`;
+			this._mountHost.style.width = `${width}px`;
+		}
 	}
 }
 
@@ -88,7 +111,7 @@ const container = viewContainerRegistry.registerViewContainer({
 	title: nls.localize2('voidContainer', 'Appable Builder'),
 	ctorDescriptor: new SyncDescriptor(ViewPaneContainer, [VOID_VIEW_CONTAINER_ID, {
 		mergeViewWithContainerWhenSingleView: true,
-		orientation: Orientation.HORIZONTAL,
+		orientation: Orientation.VERTICAL,
 	}]),
 	hideIfEmpty: false,
 	order: 1,

@@ -1,8 +1,23 @@
 import { Background } from "@/components/Background";
 import { Logo } from "@/components/Logo";
 import { AuthForm } from "@/components/AuthForm";
+import { db } from "@/lib/db";
 
-export default function LoginPage() {
+export default async function LoginPage({
+  searchParams,
+}: {
+  searchParams: { project?: string };
+}) {
+  const projectId = searchParams.project?.trim();
+  let sub = "Pick up right where you left off.";
+
+  if (projectId) {
+    const project = await db.getProject(projectId);
+    if (project?.masterPrompt) {
+      sub = `Sign in to save ${project.masterPrompt.appName} to your account and continue.`;
+    }
+  }
+
   return (
     <>
       <Background />
@@ -12,11 +27,9 @@ export default function LoginPage() {
         </div>
         <div className="card-float p-7 reveal reveal-1">
           <h1 className="text-2xl font-bold">Welcome back</h1>
-          <p className="mt-1 text-sm text-charcoal-soft">
-            Pick up right where you left off.
-          </p>
+          <p className="mt-1 text-sm text-charcoal-soft">{sub}</p>
           <div className="mt-6">
-            <AuthForm mode="login" />
+            <AuthForm mode="login" projectId={projectId} />
           </div>
         </div>
       </main>

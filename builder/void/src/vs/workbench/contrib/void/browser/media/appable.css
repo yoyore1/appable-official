@@ -45,12 +45,12 @@
 	--vscode-sideBar-background: #FDFAF4;
 	--vscode-sideBar-border: #EFE7DA;
 	--vscode-sideBar-foreground: #2B2624;
-	--vscode-panel-background: #FFF8F3;
+	--vscode-panel-background: #FDFAF4;
 	--vscode-panel-border: #EFE7DA;
-	--vscode-activityBar-background: #FFF8F3;
+	--vscode-activityBar-background: #FDFAF4;
 	--vscode-activityBar-foreground: #2B2624;
-	--vscode-titleBar-activeBackground: #FFF8F3;
-	--vscode-titleBar-inactiveBackground: #FFF8F3;
+	--vscode-titleBar-activeBackground: #FDFAF4;
+	--vscode-titleBar-inactiveBackground: #FDFAF4;
 	--vscode-titleBar-activeForeground: #2B2624;
 	--vscode-statusBar-background: #FFF0EB;
 	--vscode-statusBar-foreground: #2B2624;
@@ -66,20 +66,93 @@
 	--vscode-list-hoverBackground: #FFF3EE;
 	--vscode-list-activeSelectionBackground: #FFE8E2;
 	--vscode-editorGroup-border: #EFE7DA;
-	--vscode-editorGroupHeader-tabsBackground: #FFF8F3;
+	--vscode-editorGroupHeader-tabsBackground: #FDFAF4;
 	--vscode-tab-activeBackground: #FDFAF4;
 	--vscode-tab-inactiveBackground: #FFF8F3;
 	--vscode-menu-background: #FDFAF4;
 	--vscode-menu-foreground: #2B2624;
 	--vscode-menubar-selectionBackground: #FFE8E2;
+	--vscode-widget-shadow: rgba(43, 38, 36, 0.08);
+	--vscode-panelSection-border: #EFE7DA;
+	--vscode-sideBarSectionHeader-background: #FDFAF4;
 }
 
-/* Editor / preview area — warm cream, not Void dark. Force across the whole part. */
+/* Full-window Appable cream — no Void dark anywhere */
+html:has(.monaco-workbench.appable-chat-first),
+body.appable-chat-first {
+	background-color: #FDFAF4 !important;
+}
+
+.monaco-workbench.appable-chat-first .part.main,
+.monaco-workbench.appable-chat-first .monaco-grid-view,
+.monaco-workbench.appable-chat-first .monaco-grid-branch-node,
+.monaco-workbench.appable-chat-first .split-view-view {
+	background-color: #FDFAF4 !important;
+}
+
+/* Resize sash between chat and preview */
+.monaco-workbench.appable-chat-first .monaco-sash {
+	background-color: #EFE7DA !important;
+}
+.monaco-workbench.appable-chat-first .monaco-sash:hover {
+	background-color: #FF7A63 !important;
+}
+
+/* Preview pane (phone demo) — always Appable cream, never Void dark */
 .monaco-workbench.appable-chat-first .part.editor,
 .monaco-workbench.appable-chat-first .part.editor > .content,
 .monaco-workbench.appable-chat-first .part.editor > .content .editor-group-container,
 .monaco-workbench.appable-chat-first .part.editor .editor-group-container.empty,
-.monaco-workbench.appable-chat-first .part.editor .editor-group-watermark {
+.monaco-workbench.appable-chat-first .part.editor .editor-group-watermark,
+.monaco-workbench.appable-chat-first .part.editor .monaco-editor,
+.monaco-workbench.appable-chat-first .part.editor .monaco-editor-background,
+.monaco-workbench.appable-chat-first .part.editor .margin,
+.monaco-workbench.appable-chat-first .part.editor .overflow-guard,
+.monaco-workbench.appable-chat-first .part.editor .editor-instance {
+	background-color: #FDFAF4 !important;
+}
+
+/* Hidden until phone preview opens — full-width chat (CSS only, grid stays stable) */
+body.appable-chat-first:not(.appable-preview-open) .monaco-workbench .part.editor {
+	display: none !important;
+	visibility: hidden !important;
+	max-width: 0 !important;
+	width: 0 !important;
+	min-width: 0 !important;
+	overflow: hidden !important;
+	pointer-events: none !important;
+	opacity: 0 !important;
+}
+
+/* Cream theme even before workbench class is applied (body class is set at module load) */
+body.appable-chat-first .monaco-workbench,
+body.appable-chat-first .monaco-workbench .part.main,
+body.appable-chat-first .monaco-workbench .part.sidebar,
+body.appable-chat-first .monaco-workbench .part.editor {
+	background-color: #FDFAF4 !important;
+}
+
+/* Sidebar must stay visible and fill the window in chat-first mode */
+body.appable-chat-first .monaco-workbench .part.sidebar {
+	display: flex !important;
+	visibility: visible !important;
+	min-width: 280px !important;
+}
+
+/* Height chain: composite → pane → React mount host */
+body.appable-chat-first .monaco-workbench .part.sidebar > .content,
+body.appable-chat-first .monaco-workbench .part.sidebar .composite,
+body.appable-chat-first .monaco-workbench .part.sidebar .composite > .content,
+body.appable-chat-first .monaco-workbench .part.sidebar .monaco-pane-view,
+body.appable-chat-first .monaco-workbench .part.sidebar .pane,
+body.appable-chat-first .monaco-workbench .part.sidebar .pane.expanded,
+body.appable-chat-first .monaco-workbench .part.sidebar .pane-body {
+	height: 100% !important;
+	min-height: 0 !important;
+	flex: 1 1 auto !important;
+}
+
+.monaco-workbench.appable-chat-first .editor-group-watermark {
 	background-color: #FDFAF4 !important;
 }
 
@@ -88,8 +161,8 @@
 	display: none !important;
 }
 
-/* On-brand preview placeholder rendered in editorGroupWatermark.ts */
-.monaco-workbench .appable-watermark {
+/* Preview placeholder — only when preview pane is open */
+body.appable-preview-open .monaco-workbench .appable-watermark {
 	position: absolute;
 	top: 50%;
 	left: 50%;
@@ -138,9 +211,56 @@
 	border-color: #EFE7DA !important;
 }
 
-/* Title bar text/icons charcoal so the menu (File/Edit/…) reads on cream */
-.monaco-workbench.appable-chat-first .part.titlebar .menubar .menubar-menu-button,
+/* ---- Strip IDE chrome: only Appable Builder content in simple mode ---- */
+
+/* Entire top menu bar (File / Edit / Selection / View / Go / Run) */
+.monaco-workbench.appable-chat-first .part.titlebar {
+	display: none !important;
+}
+
+/* Bottom status bar (branch, errors, sync, etc.) */
+.monaco-workbench.appable-chat-first .part.statusbar {
+	display: none !important;
+}
+
+/* Terminal / problems / any Void panel — never show in Appable mode */
+body.appable-chat-first .monaco-workbench .part.panel,
+body.appable-chat-first .monaco-workbench .part.basepanel {
+	display: none !important;
+	visibility: hidden !important;
+	max-width: 0 !important;
+	width: 0 !important;
+	min-width: 0 !important;
+	overflow: hidden !important;
+	pointer-events: none !important;
+}
+
+/* Chat fills the window until phone preview opens */
+body.appable-chat-first:not(.appable-preview-open) .monaco-workbench .part.sidebar {
+	flex-grow: 1 !important;
+	min-width: 100% !important;
+}
+
+body.appable-chat-first:not(.appable-preview-open) .monaco-workbench .part.sidebar > .content,
+body.appable-chat-first:not(.appable-preview-open) .monaco-workbench .part.sidebar .pane-body {
+	width: 100% !important;
+	height: 100% !important;
+}
+
+/* Editor tab strip + breadcrumbs (preview area stays, tabs go) */
+.monaco-workbench.appable-chat-first .part.editor .tabs-container,
+.monaco-workbench.appable-chat-first .part.editor .breadcrumbs-below-tabs,
+.monaco-workbench.appable-chat-first .part.editor .editor-group-container > .title {
+	display: none !important;
+}
+
+/* Belt-and-suspenders if title bar flashes before layout applies */
+.monaco-workbench.appable-chat-first .part.titlebar .menubar,
+.monaco-workbench.appable-chat-first .part.titlebar .command-center,
 .monaco-workbench.appable-chat-first .part.titlebar .window-title,
-.monaco-workbench.appable-chat-first .part.titlebar .codicon {
-	color: #2B2624 !important;
+.monaco-workbench.appable-chat-first .part.titlebar .titlebar-center,
+.monaco-workbench.appable-chat-first .part.titlebar .titlebar-right .monaco-action-bar,
+.monaco-workbench.appable-chat-first .part.titlebar .layout-controls-container,
+.monaco-workbench.appable-chat-first .part.titlebar .global-actions {
+	display: none !important;
 }

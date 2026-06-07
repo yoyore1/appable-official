@@ -10,8 +10,9 @@ async function go(kind: PurchaseKind, returnTo: string) {
   redirect(url);
 }
 
-export async function depositCheckout() {
-  await go({ type: "deposit" }, "/dashboard");
+export async function depositCheckout(formData: FormData) {
+  const returnTo = String(formData.get("returnTo") ?? "").trim() || "/dashboard";
+  await go({ type: "deposit" }, returnTo);
 }
 
 export async function packCheckout(packId: string) {

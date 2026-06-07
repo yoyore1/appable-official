@@ -22,6 +22,43 @@ function num(key: string, fallback: number): number {
 export const appUrl = env("NEXT_PUBLIC_APP_URL") ?? "http://localhost:3000";
 export const serviceKey = env("APPABLE_SERVICE_KEY") ?? "dev-service-key";
 
+/** Shared DeepInfra key — one key routes to all DeepInfra models. */
+export function deepinfraKey(): string | undefined {
+  return (
+    env("DEEPINFRA_API_KEY") ??
+    env("VISION_MODEL_KEY") ??
+    env("IMAGE_MODEL_KEY") ??
+    env("STT_MODEL_KEY") ??
+    env("TTS_MODEL_KEY") ??
+    env("EMBED_MODEL_KEY") ??
+    env("BUILD_MODEL_KEY") ??
+    env("CHAT_MODEL_KEY")
+  );
+}
+
+export const deepinfra = {
+  openaiBase: env("DEEPINFRA_OPENAI_BASE") ?? "https://api.deepinfra.com/v1/openai",
+  inferenceBase: env("DEEPINFRA_INFERENCE_BASE") ?? "https://api.deepinfra.com/v1/inference",
+  key: deepinfraKey(),
+};
+
+export const falConfig = {
+  key: env("FAL_KEY") ?? env("VIDEO_API_KEY"),
+  seedanceModel:
+    env("SEEDANCE_MODEL") ?? "bytedance/seedance-2.0/image-to-video",
+};
+
+/** Custom-protocol deep link the "Open in Appable Builder" button uses. */
+export const builderProtocol = env("APPABLE_BUILDER_PROTOCOL") ?? "appable";
+
+/** GitHub org integration — one private repo per app (invisible version control). */
+export const github = {
+  /** Backend org token (repo scope) used to auto-create repos. Mock when absent. */
+  orgToken: env("GITHUB_ORG_TOKEN"),
+  /** Org that owns all user app repos, e.g. "appable-apps". */
+  org: env("GITHUB_ORG") ?? "appable-apps",
+};
+
 /** Which integrations are configured. If false → that subsystem runs in mock mode. */
 export const integrations = {
   supabase: Boolean(
@@ -32,13 +69,29 @@ export const integrations = {
   ),
   stripe: Boolean(env("STRIPE_SECRET_KEY")),
   chatModel: Boolean(env("CHAT_MODEL_BASE_URL") && env("CHAT_MODEL_KEY")),
+  cheapTextModel: Boolean(env("CHAT_MODEL_BASE_URL") && env("CHAT_MODEL_KEY")),
   /** Kimi (or other strong model) for master-plan synthesis — separate from cheap chat. */
   planModel: Boolean(
     (env("BUILD_MODEL_BASE_URL") && env("BUILD_MODEL_KEY")) ||
       (env("CHAT_MODEL_BASE_URL") && env("CHAT_MODEL_KEY"))
   ),
-  imageModel: Boolean(env("IMAGE_MODEL_BASE_URL") && env("IMAGE_MODEL_KEY")),
-  videoModel: Boolean(env("VIDEO_API_KEY")),
+  appCodeModel: Boolean(
+    (env("BUILD_MODEL_BASE_URL") && env("BUILD_MODEL_KEY")) ||
+      (env("CHAT_MODEL_BASE_URL") && env("CHAT_MODEL_KEY"))
+  ),
+  deepinfra: Boolean(deepinfraKey()),
+  visionModel: Boolean(deepinfraKey()),
+  imageModel: Boolean(deepinfraKey()),
+  imageGenModel: Boolean(deepinfraKey()),
+  speechToTextModel: Boolean(deepinfraKey()),
+  textToSpeechModel: Boolean(deepinfraKey()),
+  embeddingModel: Boolean(deepinfraKey()),
+  rerankerModel: Boolean(deepinfraKey()),
+  fal: Boolean(falConfig.key),
+  videoModel: Boolean(falConfig.key),
+  adVideoModel: Boolean(falConfig.key),
+  /** Real GitHub org repo creation vs. mock repo URLs. */
+  github: Boolean(env("GITHUB_ORG_TOKEN")),
 };
 
 export const supabaseConfig = {
@@ -53,29 +106,68 @@ export const stripeConfig = {
   publishableKey: env("NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY"),
 };
 
-export const chatModel = {
+export const cheapTextModel = {
   baseUrl: env("CHAT_MODEL_BASE_URL"),
   key: env("CHAT_MODEL_KEY"),
-  name: env("CHAT_MODEL_NAME") ?? "step-3.5-flash",
+  name: env("CHAT_MODEL_NAME") ?? "stepfun-ai/Step-3.5-Flash",
 };
 
-/** Final interview → master build prompt. Defaults to Kimi K2.6 via DeepInfra. */
-export const planModel = {
+/** @deprecated alias */
+export const chatModel = cheapTextModel;
+
+export const appCodeModel = {
   baseUrl: env("BUILD_MODEL_BASE_URL") ?? env("CHAT_MODEL_BASE_URL"),
   key: env("BUILD_MODEL_KEY") ?? env("CHAT_MODEL_KEY"),
   name: env("BUILD_MODEL_NAME") ?? "moonshotai/Kimi-K2.6",
 };
 
+export const planModel = appCodeModel;
+
+export const visionModel = {
+  baseUrl: deepinfra.openaiBase,
+  key: deepinfra.key,
+  name: env("VISION_MODEL_NAME") ?? "Qwen/Qwen3-VL-30B-A3B-Instruct",
+};
+
 export const imageModel = {
-  baseUrl: env("IMAGE_MODEL_BASE_URL"),
-  key: env("IMAGE_MODEL_KEY"),
-  name: env("IMAGE_MODEL_NAME") ?? "gpt-image-2",
+  baseUrl: deepinfra.openaiBase,
+  key: deepinfra.key,
+  name: env("IMAGE_MODEL_NAME") ?? "black-forest-labs/FLUX-2-klein-4b",
+};
+
+export const imageGenModel = imageModel;
+
+export const speechToTextModel = {
+  baseUrl: deepinfra.openaiBase,
+  key: deepinfra.key,
+  name: env("STT_MODEL_NAME") ?? "openai/whisper-large-v3-turbo",
+};
+
+export const textToSpeechModel = {
+  baseUrl: deepinfra.inferenceBase,
+  key: deepinfra.key,
+  name: env("TTS_MODEL_NAME") ?? "Qwen/Qwen3-TTS",
+};
+
+export const embeddingModel = {
+  baseUrl: deepinfra.openaiBase,
+  key: deepinfra.key,
+  name: env("EMBED_MODEL_NAME") ?? "Qwen/Qwen3-Embedding-0.6B",
+};
+
+export const rerankerModel = {
+  baseUrl: deepinfra.inferenceBase,
+  key: deepinfra.key,
+  name: env("RERANK_MODEL_NAME") ?? "Qwen/Qwen3-Reranker-0.6B",
 };
 
 export const videoModel = {
-  baseUrl: env("VIDEO_API_BASE_URL"),
-  key: env("VIDEO_API_KEY"),
+  baseUrl: "https://queue.fal.run",
+  key: falConfig.key,
+  name: falConfig.seedanceModel,
 };
+
+export const adVideoModel = videoModel;
 
 /** Plain-language unit shown to users is "build power", never "tokens". */
 export const buildPower = {
@@ -129,20 +221,4 @@ export const courseTiers = [
   },
 ] as const;
 
-/** The 5-question interview. Colors uses dynamic palette chips from interviewHelpers. */
-export const interviewQuestions = [
-  { id: "idea", prompt: "Tell me about your app — what's the idea?", kind: "text" as const },
-  { id: "audience", prompt: "Who's it for?", kind: "text" as const },
-  { id: "features", prompt: "What are the 3 main things it does?", kind: "text" as const },
-  {
-    id: "name",
-    prompt: "What do you want to call it? (Or say \"suggest one\" and I'll name it.)",
-    kind: "text" as const,
-  },
-  {
-    id: "colors",
-    prompt: "Last one — pick a palette that feels right, or tap Surprise me:",
-    kind: "choice" as const,
-    options: [] as string[],
-  },
-] as const;
+/** Adaptive interview flow lives in `@/lib/interviewFlow` (reference branch + full path). */

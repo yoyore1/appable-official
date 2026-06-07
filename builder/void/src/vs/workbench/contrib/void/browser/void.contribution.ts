@@ -68,7 +68,7 @@ import './voidSCMService.js'
 // register Appable Builder service (renderer proxy → main-process engine channel)
 import './appableBuilderService.js'
 
-// chat-first layout (hide IDE chrome by default) + advanced view toggle
+// chat-first layout (hide IDE chrome)
 import './appableLayoutService.js'
 import './appableLayoutContrib.js'
 

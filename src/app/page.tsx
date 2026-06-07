@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { ArrowRight, Sparkles, Wand2, Rocket, Play } from "lucide-react";
 import { Background } from "@/components/Background";
+import { LandingHero } from "@/components/LandingHero";
 import { MarketingNav } from "@/components/MarketingNav";
 import { PhonePreview } from "@/components/PhonePreview";
 
@@ -31,24 +32,7 @@ export default function LandingPage() {
               Store — through a friendly chat. No code. No jargon.
             </p>
 
-            {/* One inviting hero chat input */}
-            <form
-              action="/signup"
-              className="reveal reveal-4 mt-7 flex items-center gap-2 rounded-2xl bg-cream/90 p-2 shadow-float backdrop-blur"
-            >
-              <input
-                name="idea"
-                className="w-full bg-transparent px-3 py-2.5 text-charcoal outline-none placeholder:text-warmgrey"
-                placeholder="My app idea is…"
-                aria-label="Your app idea"
-              />
-              <button className="btn-primary whitespace-nowrap">
-                Start building <ArrowRight className="h-4 w-4" />
-              </button>
-            </form>
-            <p className="reveal reveal-5 mt-3 text-sm text-warmgrey">
-              $1 to get started — that&apos;s it. It goes toward your first build.
-            </p>
+            <LandingHero />
           </div>
 
           {/* Project preview cards */}
@@ -87,7 +71,7 @@ export default function LandingPage() {
       <section className="mx-auto max-w-6xl px-5 py-12">
         <div className="grid gap-5 sm:grid-cols-3">
           {[
-            { icon: Sparkles, title: "Tell us your idea", body: "A short, friendly chat. Five questions, that's it." },
+            { icon: Sparkles, title: "Tell us your idea", body: "Start with your idea on the homepage — then a short, friendly chat." },
             { icon: Wand2, title: "We build it", body: "Your app comes to life — onboarding, screens, the works." },
             { icon: Rocket, title: "Launch it", body: "Screenshots, store copy, and it's ready for the App Store." },
           ].map((s, i) => (
@@ -127,7 +111,7 @@ export default function LandingPage() {
           <h2 className="max-w-xl text-3xl font-bold text-balance sm:text-4xl">
             Your idea deserves to be a real app.
           </h2>
-          <Link href="/signup" className="btn-primary btn-pill">
+          <Link href="/#start" className="btn-primary btn-pill">
             Build your first app free <ArrowRight className="h-5 w-5" />
           </Link>
         </div>

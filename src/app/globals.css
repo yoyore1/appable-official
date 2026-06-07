@@ -133,6 +133,11 @@
   .pill[data-selected="true"] {
     @apply bg-coral text-white border-transparent shadow-soft;
   }
+  .pill-accent {
+    @apply rounded-full px-5 py-2.5 text-sm font-medium transition-all
+           cursor-pointer select-none border-coral/35 bg-coral/10 text-coral
+           hover:bg-coral/15 hover:border-coral/50;
+  }
 
   .label {
     @apply text-xs font-medium uppercase tracking-wide text-warmgrey;

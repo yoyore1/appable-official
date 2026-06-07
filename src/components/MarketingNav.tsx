@@ -13,9 +13,6 @@ export function MarketingNav() {
           <Link href="/login" className="btn-ghost">
             Sign in
           </Link>
-          <Link href="/signup" className="btn-primary">
-            Start building
-          </Link>
         </nav>
       </div>
     </header>

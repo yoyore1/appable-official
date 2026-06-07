@@ -10,6 +10,10 @@ export interface UserAccount {
   dataSharingOptIn: boolean;
   isAdmin: boolean;
   courseTierId: string | null;
+  /** Free-tier live AI spend (USD) — capped at ~$0.55 per models-polish spec. */
+  aiUsageUsd: number;
+  /** TTS characters consumed on free tier (hard-capped). */
+  ttsCharsUsed: number;
   createdAt: string;
 }
 
@@ -19,15 +23,25 @@ export type ProjectStatus =
   | "building"
   | "live";
 
+/** Which app the Builder generates. RN = React Native + Expo (runs anywhere,
+ *  the accessible default). Swift = native SwiftUI (desktop-only, recommended). */
+export type BuildTarget = "rn" | "swift";
+
 /** The structured handoff artifact the build engine fetches by project ID. */
 export interface MasterBuildPrompt {
   appName: string;
   description: string;
   audience: string;
+  /** What makes their version original (reference path); null on full interview. */
+  twist: string | null;
   features: string[];
+  /** Internal blueprint — drives template assembly downstream. */
+  layoutArchetype: string;
   vibe: Vibe;
   colors: string;
   screens: string[];
+  /** Named reference app, if any — never copied visually. */
+  referenceApp: string | null;
 }
 
 export interface LaunchAssets {
@@ -66,8 +80,30 @@ export interface Project {
   masterPrompt: MasterBuildPrompt | null;
   launch: LaunchAssets;
   legal: LegalDocs;
+  /** Chosen generation target (set after the interview). null = not chosen yet. */
+  target: BuildTarget | null;
+  /** Private GitHub repo backing this app (invisible version control). Mock URL
+   *  in dev. Maps user_id → app_id → github_repo_url per the phase spec. */
+  githubRepoUrl: string | null;
+  /** Generated RN/Expo screen model — web preview + future codegen source of truth. */
+  expoAppModel: import("@/lib/expoApp/types").ExpoAppModel | null;
   createdAt: string;
   updatedAt: string;
+}
+
+/**
+ * Short-lived handoff token: minted on the web when the user opens an app in the
+ * Builder, exchanged once by the Builder for the app context. Kills the manual
+ * project-ID copy/paste. Tied to a user + project.
+ */
+export interface HandoffToken {
+  token: string;
+  userId: string;
+  projectId: string;
+  target: BuildTarget | null;
+  createdAt: string;
+  expiresAt: string;
+  usedAt: string | null;
 }
 
 export interface CachedBuild {

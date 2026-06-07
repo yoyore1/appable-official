@@ -16,7 +16,7 @@ export interface InterviewQuestion {
 export const INTERVIEW_QUESTIONS: InterviewQuestion[] = [
 	{ id: 'idea', prompt: "Tell me about your app — what's the idea?", kind: 'text' },
 	{ id: 'audience', prompt: "Who's it for?", kind: 'text' },
-	{ id: 'features', prompt: 'What are the 3 main things it does?', kind: 'text' },
+	{ id: 'features', prompt: 'What are 2–3 main things it does? (Be specific — e.g. daily habit streaks, book appointments, track progress)', kind: 'text' },
 	{ id: 'name', prompt: 'What do you want to call it? (Or say "suggest one" and I\'ll name it.)', kind: 'text' },
 	{ id: 'colors', prompt: 'Last one — pick a palette that feels right, or tap Surprise me:', kind: 'choice' },
 ];
@@ -34,6 +34,11 @@ export function planWelcomeMessage(mp: MasterBuildPrompt): string {
 	const feats = mp.features.slice(0, 2).join(', ').toLowerCase() || 'your idea'
 	const featLine = feats.charAt(0).toUpperCase() + feats.slice(1)
 	return `Found “${mp.appName}” — ${mp.vibe.toLowerCase()}, for ${mp.audience.toLowerCase()}. ${featLine}. ${mp.colors} palette. Tap “Build my app” when you're ready.`
+}
+
+/** Welcome after opening a project from getappable.com (deep-link handoff). */
+export function handoffWelcomeMessage(mp: MasterBuildPrompt): string {
+	return planWelcomeMessage(mp)
 }
 
 /** One friendly build status line, unlocked when `atPercent` is reached. */
@@ -84,83 +89,168 @@ export function buildStepIndex(percent: number, steps: BuildAppStep[]): number {
 	return idx
 }
 
-const HYPE_LINE: Record<InterviewQuestionId, string> = {
-	idea: 'Love it.',
-	audience: 'Perfect.',
-	features: 'Love those.',
-	name: 'Love it.',
-	colors: 'Gorgeous.',
-};
-
-function answerSnippet(answer: string, max = 34): string {
-	return (
-		answer
-			.trim()
-			.split(/[.!?\n]/)[0]
-			?.slice(0, max)
-			.trim()
-			.toLowerCase() ?? ''
-	);
+function hashPick(seed: string, options: string[]): string {
+	let h = 0
+	for (let i = 0; i < seed.length; i++) {
+		h = (h * 31 + seed.charCodeAt(i)) | 0
+	}
+	return options[Math.abs(h) % options.length]
 }
 
-function warmFromAnswer(questionId: InterviewQuestionId, answer: string): string {
-	const a = answer.toLowerCase();
-	const bit = answerSnippet(answer);
+function answerSnippet(answer: string, max = 56): string {
+	const first = answer.trim().split(/[.!?\n]/)[0]?.trim() ?? ''
+	if (!first) return ''
+	if (first.length <= max) return first
+	const cut = first.slice(0, max)
+	const lastSpace = cut.lastIndexOf(' ')
+	return (lastSpace > 14 ? cut.slice(0, lastSpace) : cut).trim()
+}
+
+function hookPhrase(answer: string): string {
+	const a = answer.toLowerCase()
+	if (/dog\s*walk|walker|pet\s*sit/.test(a)) return 'dog walkers'
+	if (/connect|match|link/.test(a) && /area|location|nearby|local|neighborhood/.test(a)) return 'by area'
+	if (/recipe|dish|meal|cook/.test(a) && /photo|camera|snap/.test(a)) return 'from a photo'
+	if (/flight|travel|trip/.test(a)) return 'finding flights'
+	if (/book|appointment|schedule/.test(a)) return 'booking'
+	const bit = answerSnippet(answer, 40)
+	return bit.length > 6 ? bit : ''
+}
+
+function warmFromAnswer(
+	questionId: InterviewQuestionId,
+	answer: string,
+	prior?: Partial<InterviewAnswers>
+): string {
+	const a = answer.toLowerCase()
+	const hook = hookPhrase(answer)
+	const idea = (prior?.idea ?? '').toLowerCase()
+	const seed = `${questionId}:${answer}`
 
 	if (questionId === 'idea') {
-		if (
-			(/recipe|dish|food|meal|cook|ingredient/.test(a)) &&
-			(/photo|pic|camera|picture|snap|roll|gallery/.test(a))
-		) {
-			return "Wait snap a dish and get the recipe?? That's so useful.";
+		if (/dog|pet|puppy/.test(a) && /walk|walker|sitter|sit/.test(a)) {
+			return hashPick(seed, [
+				'Wait a dog walker app that matches by neighborhood?? People would actually use that.',
+				"Okay connecting dog walkers to owners nearby — that's such a real problem.",
+				"Dog walkers + people in their area on one app — yeah that's needed.",
+			])
 		}
-		if (bit.length > 8) return `Okay ${bit} — I kind of love that.`;
-		return "Wait that's actually such a good idea.";
+		if (/connect|match|marketplace|link/.test(a) && /area|location|nearby|local|neighborhood/.test(a)) {
+			return hashPick(seed, [
+				"Oh matching people by area — that's what makes this actually work.",
+				'Yeah the local piece is everything for something like this.',
+				'Connecting nearby instead of random — smart angle.',
+			])
+		}
+		if (/recipe|dish|food|meal|cook/.test(a) && /photo|pic|camera|snap|picture/.test(a)) {
+			return hashPick(seed, [
+				"Wait snap a dish and get the recipe?? That's so useful.",
+				'Photo → recipe is one of those ideas that just clicks.',
+			])
+		}
+		if (hook) {
+			return hashPick(seed, [
+				`Wait ${hook} — that's actually a really clear idea.`,
+				`Okay ${hook} — I can totally picture the app.`,
+			])
+		}
+		return hashPick(seed, [
+			"Wait that's actually such a good idea.",
+			"Okay yeah tell me more — I'm already picturing it.",
+		])
 	}
 
 	if (questionId === 'audience') {
-		if (/mom|mother|parent/.test(a) && /young|adult|teen|cook|learn/.test(a)) {
-			return "Okay moms + people learning to cook — that's such a real niche.";
+		if (/dog|pet|owner/.test(a) && /dog|pet|walk/.test(idea)) {
+			return hashPick(seed, [
+				"Yeah busy dog owners who don't have time to walk — that's the person.",
+				'Okay pet parents in your area — makes total sense for this.',
+			])
 		}
-		if (/young|teen|student|adult|beginner|busy/.test(a) && bit.length > 6) {
-			return `Yeah ${bit} — totally get who you mean.`;
+		if (answerSnippet(answer, 36).length > 8) {
+			return hashPick(seed, [
+				`Yeah ${answerSnippet(answer, 36)} — I can picture them opening this.`,
+				`Okay so ${answerSnippet(answer, 32)} — makes sense for what you described.`,
+			])
 		}
-		if (bit.length > 6) return `Okay ${bit} — makes total sense who this is for.`;
-		return "Yeah I can totally picture who'd use this.";
+		return hashPick(seed, [
+			"Yeah I can totally picture who'd use this.",
+			"Okay that helps — I know who we're building for now.",
+		])
 	}
 
 	if (questionId === 'features') {
-		const first = answer.split(/[,;]|\band\b/i)[0]?.trim().toLowerCase();
-		if (first && first.length > 4) {
-			return `Okay ${first} — that's a solid core feature.`;
+		const isFlow =
+			a.split(/\s+/).length >= 10 &&
+			(/apply|match|vice versa|then|or you can/.test(a) ||
+				((a.match(/,/g)?.length ?? 0) >= 2 && /put|post|enter/.test(a)))
+		if (
+			isFlow &&
+			/breed|dog/.test(a) &&
+			/area|location/.test(a) &&
+			/pay|price|budget/.test(a) &&
+			/apply|match/.test(a)
+		) {
+			return hashPick(seed, [
+				"Wait owners post breed + area + pay and walkers apply? That's the whole loop.",
+				'Okay and it works both ways — owners or walkers can match. Smart.',
+			])
 		}
-		if (bit.length > 6) return `Love that it does ${bit}.`;
-		return 'Yeah those are exactly the right things.';
+		if (isFlow) {
+			return hashPick(seed, [
+				'Okay yeah I can follow that whole flow — super clear.',
+				"Wait that's literally the journey from open to done. Love it.",
+			])
+		}
+		const items = answer
+			.split(/[,;]|\band\b/i)
+			.map((s) => s.trim())
+			.filter((s) => s.length > 2 && s.split(/\s+/).length <= 10)
+		if (items.length >= 2) {
+			const a0 = items[0].split(/\s+/).slice(0, 5).join(' ').toLowerCase()
+			const a1 = items[1].split(/\s+/).slice(0, 5).join(' ').toLowerCase()
+			return hashPick(seed, [
+				`Okay ${a0}, ${a1} — solid combo.`,
+				`Yeah ${a0} plus ${a1} — covers the main use cases.`,
+			])
+		}
+		return hashPick(seed, [
+			'Yeah those features together actually tell a story.',
+			"Okay that combo makes sense for what you're building.",
+		])
 	}
 
 	if (questionId === 'name') {
 		if (/suggest|you pick|name it|surprise/i.test(a)) {
-			return "Okay I'll cook up the perfect name for this.";
+			return hashPick(seed, [
+				"Okay I'll cook up something that fits the vibe.",
+				"On it — I'll find a name that actually sounds like your app.",
+			])
 		}
-		const n = answer.trim();
-		if (n.length > 1) return `${n} — that's a great name.`;
-		return "Okay yeah we'll find the perfect name.";
+		const n = answer.trim()
+		if (n.length > 1) return hashPick(seed, [`${n} — yeah that lands.`, `Wait ${n} is actually really good.`])
+		return "Okay yeah we'll find the perfect name."
 	}
 
 	if (questionId === 'colors') {
 		if (/surprise|you pick|idk|don't know|anything/.test(a)) {
-			return "Okay I'll make it look incredible — trust me.";
+			return "On it — I'll pick colors that fit your app."
 		}
-		if (bit.length > 3) return `Ooh ${bit} — that's going to be beautiful.`;
-		return 'Okay those colors are going to eat.';
+		const bit = answerSnippet(answer)
+		if (bit.length > 3) return hashPick(seed, [`${bit} — yeah that fits.`, `Ooh ${bit} — nice pick.`])
+		return 'Those colors will look great.'
 	}
 
-	return bit.length > 6 ? `Okay ${bit} — love that.` : "Okay yeah I'm into this.";
+	return hashPick(seed, ['Got it — building on that.', 'Yeah that helps — keeping going.'])
 }
 
-/** Two-bubble ack after every answer (matches web interview). */
-export function interviewAcks(questionId: InterviewQuestionId, answer: string): string[] {
-	return [warmFromAnswer(questionId, answer), HYPE_LINE[questionId]];
+/** One personal ack after every answer (matches web interview). */
+export function interviewAcks(
+	questionId: InterviewQuestionId,
+	answer: string,
+	prior?: Partial<InterviewAnswers>
+): string[] {
+	return [warmFromAnswer(questionId, answer, prior)]
 }
 
 function ctxFromAnswers(answers: Partial<InterviewAnswers>): string {

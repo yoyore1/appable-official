@@ -1,4 +1,5 @@
 import { redirect } from "next/navigation";
+import { headers } from "next/headers";
 import Link from "next/link";
 import {
   ExternalLink,
@@ -6,14 +7,14 @@ import {
   FileText,
   ShieldCheck,
   LifeBuoy,
-  MonitorDown,
 } from "lucide-react";
 import { Background } from "@/components/Background";
 import { AppNav } from "@/components/AppNav";
 import { PhonePreview } from "@/components/PhonePreview";
 import { LaunchPanel } from "@/components/LaunchPanel";
 import { Confetti } from "@/components/Confetti";
-import { CopyProjectId } from "@/components/CopyProjectId";
+import { BuilderHandoff } from "@/components/BuilderHandoff";
+import { GUEST_USER_ID } from "@/lib/guestProject";
 import { getCurrentUser } from "@/lib/session";
 import { db } from "@/lib/db";
 import { launchPackCheckout } from "@/server/checkout";
@@ -31,11 +32,25 @@ export default async function ProjectPage({
   if (!user) redirect("/login");
 
   const project = await db.getProject(params.id);
-  if (!project || project.userId !== user.id) redirect("/dashboard");
+  if (!project) redirect("/dashboard");
+
+  if (project.userId === GUEST_USER_ID) {
+    redirect(`/signup?project=${project.id}`);
+  }
+
+  if (project.userId !== user.id) redirect("/dashboard");
+
+  if (!user.depositPaid) {
+    redirect(`/deposit?project=${project.id}`);
+  }
   if (!project.masterPrompt) redirect(`/project/${project.id}/build`);
 
   const mp = project.masterPrompt;
   const buyLaunch = launchPackCheckout.bind(null, project.id);
+
+  // Server-side device detection routes mobile users to the right option.
+  const ua = headers().get("user-agent") ?? "";
+  const isMobile = /android|iphone|ipad|ipod|mobile/i.test(ua);
 
   return (
     <>
@@ -90,88 +105,25 @@ export default async function ProjectPage({
               </div>
             </div>
 
-            <section className="overflow-hidden rounded-xl border border-line/60 bg-cream/85 shadow-soft">
-              <div className="grid lg:grid-cols-[1.2fr_minmax(180px,0.85fr)]">
-                <div className="border-b border-line/60 p-4 lg:border-b-0 lg:border-r">
-                  <div className="mb-2 flex items-center gap-2">
-                    <span className="grid h-7 w-7 place-items-center rounded-lg bg-coral text-xs font-bold text-white">
-                      A
-                    </span>
-                    <div>
-                      <h2 className="text-sm font-semibold">Build it in Appable Builder</h2>
-                      <p className="text-xs text-warmgrey">Describe it. Build it. Ship it.</p>
-                    </div>
-                  </div>
-
-                  <p className="text-sm font-medium text-charcoal">
-                    This is your blueprint — not a finished app yet.
+            <section className="overflow-hidden rounded-xl border border-line/60 bg-cream/85 p-4 shadow-soft">
+              <div className="mb-3 flex items-center gap-2">
+                <span className="grid h-7 w-7 place-items-center rounded-lg bg-coral text-xs font-bold text-white">
+                  A
+                </span>
+                <div>
+                  <h2 className="text-sm font-semibold">Turn it into a real app</h2>
+                  <p className="text-xs text-warmgrey">
+                    Pick how to build {mp.appName}. We&apos;ll open it for you — no codes to copy.
                   </p>
-                  <p className="mt-1.5 text-xs leading-relaxed text-charcoal-soft">
-                    To turn <strong className="font-semibold text-charcoal">{mp.appName}</strong>{" "}
-                    into a real iOS app, download{" "}
-                    <strong className="font-semibold text-charcoal">Appable Builder</strong> on
-                    your computer. That&apos;s the only way to build it — there&apos;s no shortcut
-                    on the website.
-                  </p>
-
-                  <ol className="mt-3 space-y-2 text-xs text-charcoal-soft">
-                    <li className="flex gap-2">
-                      <span className="grid h-5 w-5 shrink-0 place-items-center rounded-full bg-coral/15 text-[10px] font-bold text-coral-deep">
-                        1
-                      </span>
-                      <span>
-                        <strong className="font-semibold text-charcoal">
-                          Download Appable Builder
-                        </strong>{" "}
-                        on your Mac — free to install
-                      </span>
-                    </li>
-                    <li className="flex gap-2">
-                      <span className="grid h-5 w-5 shrink-0 place-items-center rounded-full bg-coral/15 text-[10px] font-bold text-coral-deep">
-                        2
-                      </span>
-                      <span>
-                        Open it and tap{" "}
-                        <em className="font-medium text-charcoal">I already made my plan</em>
-                      </span>
-                    </li>
-                    <li className="flex gap-2">
-                      <span className="grid h-5 w-5 shrink-0 place-items-center rounded-full bg-coral/15 text-[10px] font-bold text-coral-deep">
-                        3
-                      </span>
-                      <span>Paste your project ID from the box on the right</span>
-                    </li>
-                    <li className="flex gap-2">
-                      <span className="grid h-5 w-5 shrink-0 place-items-center rounded-full bg-coral/15 text-[10px] font-bold text-coral-deep">
-                        4
-                      </span>
-                      <span>Build, polish your screens, then launch</span>
-                    </li>
-                  </ol>
-                </div>
-
-                <div className="flex flex-col justify-center gap-2.5 bg-sand/25 p-4">
-                  <div>
-                    <p className="text-[10px] font-semibold uppercase tracking-wide text-warmgrey">
-                      Your project ID
-                    </p>
-                    <code className="mt-1 block break-all rounded-lg border border-line bg-white px-3 py-2 font-mono text-[11px] text-charcoal">
-                      {project.id}
-                    </code>
-                  </div>
-
-                  <CopyProjectId projectId={project.id} compact />
-
-                  <button
-                    type="button"
-                    disabled
-                    className="inline-flex w-full items-center justify-center gap-1.5 rounded-lg border border-coral/30 bg-coral/8 px-3 py-2 text-xs font-semibold text-coral-deep"
-                  >
-                    <MonitorDown className="h-3.5 w-3.5" />
-                    Download Appable Builder
-                  </button>
                 </div>
               </div>
+
+              <BuilderHandoff
+                projectId={project.id}
+                appName={mp.appName}
+                isMobile={isMobile}
+                initialTarget={project.target}
+              />
             </section>
           </div>
         </div>

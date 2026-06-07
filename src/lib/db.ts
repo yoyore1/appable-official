@@ -9,7 +9,9 @@ import { integrations } from "@/lib/config";
 import { saveStore, store } from "@/lib/mock/store";
 import { uid } from "@/lib/utils";
 import type {
+  BuildTarget,
   CachedBuild,
+  HandoffToken,
   Project,
   UserAccount,
   Vibe,
@@ -46,6 +48,8 @@ export const db = {
       dataSharingOptIn: false,
       isAdmin: s.users.size === 0, // first user is admin (founder) in mock mode
       courseTierId: null,
+      aiUsageUsd: 0,
+      ttsCharsUsed: 0,
       createdAt: now(),
     };
     s.users.set(user.id, user);
@@ -109,6 +113,9 @@ export const db = {
       masterPrompt: null,
       launch: { purchased: false },
       legal: {},
+      target: null,
+      githubRepoUrl: null,
+      expoAppModel: null,
       createdAt: now(),
       updatedAt: now(),
     };
@@ -135,6 +142,45 @@ export const db = {
     s.projects.set(id, next);
     saveStore();
     return next;
+  },
+
+  // ---- handoff tokens (web → Builder, single-use, short-lived) -------------
+  async createHandoff(
+    userId: string,
+    projectId: string,
+    target: BuildTarget | null,
+    ttlMs = 15 * 60 * 1000
+  ): Promise<HandoffToken> {
+    const s = store();
+    const t: HandoffToken = {
+      token: `${uid("ho")}${uid("k").slice(2)}`,
+      userId,
+      projectId,
+      target,
+      createdAt: now(),
+      expiresAt: new Date(Date.now() + ttlMs).toISOString(),
+      usedAt: null,
+    };
+    s.handoffs.set(t.token, t);
+    saveStore();
+    return t;
+  },
+
+  async getHandoff(token: string): Promise<HandoffToken | undefined> {
+    return store().handoffs.get(token);
+  },
+
+  /** Validate + consume a handoff token. Returns the token if still valid. */
+  async consumeHandoff(token: string): Promise<HandoffToken | null> {
+    const s = store();
+    const t = s.handoffs.get(token);
+    if (!t) return null;
+    if (t.usedAt) return null;
+    if (new Date(t.expiresAt).getTime() < Date.now()) return null;
+    const used = { ...t, usedAt: now() };
+    s.handoffs.set(token, used);
+    saveStore();
+    return used;
   },
 
   // ---- cache (pgvector in production) --------------------------------------

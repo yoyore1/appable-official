@@ -21,6 +21,7 @@ export interface MasterBuildPrompt {
 
 export type BuildMode = 'base' | 'full';
 export type ShipPath = 'mac' | 'windows';
+export type BuildTarget = 'rn' | 'swift';
 
 export interface BuildOptions {
 	projectId: string;
@@ -83,6 +84,26 @@ export interface BuildResult {
 
 export const APPABLE_CHANNEL = 'void-channel-appable';
 
+/** App context returned when the web deep link is exchanged (no manual project ID). */
+export interface HandoffPayload {
+	app: {
+		id: string;
+		name: string;
+		target: BuildTarget | null;
+		githubRepoUrl: string | null;
+		status: string;
+	};
+	masterPrompt: MasterBuildPrompt;
+	user: {
+		id: string;
+		email: string;
+		name: string | null;
+		buildPower: number;
+		reviewBalance: number;
+		dataSharingOptIn: boolean;
+	};
+}
+
 export interface IAppableBuilderService {
 	readonly _serviceBrand: undefined;
 	/** Friendly progress stream for the chat UI. */
@@ -95,6 +116,10 @@ export interface IAppableBuilderService {
 	generatePlan(answers: InterviewAnswers): Promise<MasterBuildPrompt>;
 	/** Fetch a saved plan from the platform by project ID (for the “I already have a plan” flow). */
 	fetchPlan(projectId: string): Promise<MasterBuildPrompt>;
+	/** Fired when a web deep link (appable://handoff) is opened — auto-load the app. */
+	readonly onHandoff: Event<HandoffPayload>;
+	/** Pending handoff from startup URL, consumed once (renderer mounts after cold start). */
+	takePendingHandoff(): Promise<HandoffPayload | null>;
 }
 
 export const IAppableBuilderService = createDecorator<IAppableBuilderService>('appableBuilderService');
