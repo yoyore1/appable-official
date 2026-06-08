@@ -26,6 +26,7 @@ import { withLegalSettings } from "./smartInteractions";
 import { buildTheme } from "./theme";
 import { trackLlmCost } from "@/lib/aiBillingContext";
 import { parseDeepInfraCost, type AiChatResult } from "@/lib/deepinfraCost";
+import { completeAuthFlow } from "./authFlowDefaults";
 import type { ExpoAppModel, ExpoAppModelInput } from "./types";
 
 function parseJsonFromText<T>(text: string): T | null {
@@ -190,10 +191,19 @@ HOME BY ROLE SCHEMA (when dual-sided):
 { "owner": { "headline", "subheadline", "heroLabel", "heroSublabel", "sections": [...] }, "walker": { ... } }
 ${category === "cooking" ? '- Recipes also need "ingredients": ["qty + item", ...] (6+)' : ""}
 
+AUTH FLOW SCHEMA (when accounts are needed — ALWAYS include BOTH sign-up AND sign-in):
+flow.auth: {
+  "enabled": true,
+  "signUpTitle", "signUpSubtitle", "submitLabel": "Sign up with email",
+  "signInTitle", "signInSubtitle", "signInSubmitLabel": "Sign in with email",
+  "captureName": true, "captureRoleInSignUp"?, "showGoogleSignIn": true, "showAppleSignIn": true
+}
+NEVER enable auth with sign-up only — returning users need signInTitle + signInSubmitLabel on the same screen.
+
 IMPLICIT UI (preview wires these — include affordances in copy):
 - save/favorite on detail cards; collection action when blueprint has collectionTabId
 - profile settings rows are real and tappable — must include Sign out and Delete account (App Store requirement)
-- when auth exists: show Continue with Google and Continue with Apple above email (recommended for launch)
+- when auth exists: Google + Apple above email on BOTH sign-up and sign-in tabs (recommended for launch)
 - primaryAction on list items — each button gets a preview outcome (compose, status change, navigate, open detail). A separate pass reviews previewActions; still use domain-appropriate labels.
 
 PREVIEW ACTIONS SCHEMA (optional in draft — refined in wiring pass):
@@ -270,9 +280,18 @@ function finalize(
   };
   const shaped = enforceProductShape({ ...input, home }, mp, interview);
 
+  const flow =
+    shaped.flow?.auth?.enabled && shaped.flow.auth.signUpTitle && shaped.flow.auth.submitLabel
+      ? {
+          ...shaped.flow,
+          auth: completeAuthFlow(shaped.flow.auth, mp.appName),
+        }
+      : shaped.flow;
+
   const base: ExpoAppModel = {
     version: 1,
     ...shaped,
+    flow,
     home: shaped.home,
     theme: buildTheme(mp),
     capabilities: {

@@ -48,6 +48,19 @@ export const falConfig = {
     env("SEEDANCE_MODEL") ?? "bytedance/seedance-2.0/image-to-video",
 };
 
+/** OpenRouter — premium escalation only (complex reasoning / vision / quality images). */
+export const openrouterConfig = {
+  baseUrl: env("OPENROUTER_BASE_URL") ?? "https://openrouter.ai/api/v1",
+  key: env("OPENROUTER_API_KEY"),
+  models: {
+    reasoning:
+      env("OPENROUTER_REASONING_MODEL") ?? "anthropic/claude-sonnet-4",
+    vision: env("OPENROUTER_VISION_MODEL") ?? "google/gemini-2.0-flash-001",
+    image: env("OPENROUTER_IMAGE_MODEL") ?? "openai/gpt-4o",
+    text: env("OPENROUTER_TEXT_MODEL") ?? "openai/gpt-4o-mini",
+  },
+};
+
 /** Custom-protocol deep link the "Open in Appable Builder" button uses. */
 export const builderProtocol = env("APPABLE_BUILDER_PROTOCOL") ?? "appable";
 
@@ -90,6 +103,8 @@ export const integrations = {
   fal: Boolean(falConfig.key),
   videoModel: Boolean(falConfig.key),
   adVideoModel: Boolean(falConfig.key),
+  /** Premium frontier models via OpenRouter (small % of calls). */
+  openrouter: Boolean(openrouterConfig.key),
   /** Real GitHub org repo creation vs. mock repo URLs. */
   github: Boolean(env("GITHUB_ORG_TOKEN")),
 };

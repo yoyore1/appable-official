@@ -1,4 +1,5 @@
 import type { BrainstormTurn, InterviewTurn, MasterBuildPrompt } from "@/lib/types";
+import { coachBuiltStateBlock } from "./builtState";
 import { isDeepBrainstormMessage } from "./brainstormContext";
 import type { AppReadinessAudit, ReadinessItem } from "./readinessAudit";
 import type { ExpoAppModel } from "./types";
@@ -24,6 +25,7 @@ export interface RetrievedBrainstormContext {
   intent: BrainstormIntent;
   focusItems: ReadinessItem[];
   spine: string;
+  builtState: string;
   previewSnippets: string;
   interviewSnippet: string;
   continuingFrom: string | null;
@@ -130,13 +132,24 @@ function previewSnippetsForItems(model: ExpoAppModel, items: ReadinessItem[]): s
   }
 
   if (ids.has("messaging") && model.tabs.some((t) => /message|chat/i.test(t.label))) {
-    lines.push("Messages tab exists in preview (UI only).");
+    const wired = Boolean(model.previewActions?.messagingTabId);
+    lines.push(
+      wired
+        ? "Messaging is already wired in the preview — do not suggest adding a Messages tab again."
+        : "Messages tab exists in preview — suggest wiring threads/backend if they want more, not adding from scratch."
+    );
   }
 
   if (ids.has("auth")) {
-    lines.push(
-      "Recommend Google + Apple sign-in for launch; email is OK for preview testing with linked Supabase."
-    );
+    if (model.flow?.auth?.enabled) {
+      lines.push(
+        "Sign-up and sign-in are already in the preview — only discuss OAuth setup in Connections or production hardening."
+      );
+    } else {
+      lines.push(
+        "Recommend Google + Apple sign-in for launch; email is OK for preview testing with linked Supabase."
+      );
+    }
   }
   if (ids.has("google-sign-in")) {
     lines.push(
@@ -180,7 +193,7 @@ function answerInstructions(
       return (
         `Answer ONLY about "${focus}" for ${appName}. ` +
         `Sound like a senior engineer brainstorming over coffee — specific, opinionated, no filler openers. ` +
-        `Structure: (1) what the app design already includes for this (2) demo UI vs production-ready (3) what they'd need to ship (4) one next step. ` +
+        `Structure: (1) what the app design already includes for this — skip if listed under Already built (2) demo UI vs production-ready (3) what they'd still need to ship (4) one next step. ` +
         `Never say you see their screen or preview. Do NOT list other checklist items. ~120–180 words.`
       );
     case "full_walkthrough":
@@ -256,6 +269,7 @@ export function retrieveBrainstormContext(
     intent,
     focusItems,
     spine: buildSpine(mp, model),
+    builtState: coachBuiltStateBlock(model),
     previewSnippets: model ? previewSnippetsForItems(model, focusItems) : "",
     interviewSnippet,
     continuingFrom,
@@ -275,6 +289,10 @@ export function formatRetrievedContextForPrompt(
 
   if (connectorNote?.trim()) {
     parts.push("--- Connections (platform) ---", connectorNote.trim());
+  }
+
+  if (retrieved.builtState) {
+    parts.push(retrieved.builtState);
   }
 
   if (summary?.trim()) {

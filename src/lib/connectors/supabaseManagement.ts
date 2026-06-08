@@ -147,3 +147,45 @@ do $$ begin
   end if;
 end $$;
 `.trim();
+
+/** In-app messaging — sender_id + text only (no read receipts for v1). */
+export const APPABLE_MESSAGING_SETUP_SQL = `
+create table if not exists public.appable_conversations (
+  id uuid primary key default gen_random_uuid(),
+  owner_id uuid not null references auth.users(id) on delete cascade,
+  walker_id uuid not null references auth.users(id) on delete cascade,
+  created_at timestamptz not null default now()
+);
+
+create table if not exists public.appable_messages (
+  id uuid primary key default gen_random_uuid(),
+  conversation_id uuid not null references public.appable_conversations(id) on delete cascade,
+  sender_id uuid not null references auth.users(id) on delete cascade,
+  text text not null,
+  created_at timestamptz not null default now()
+);
+
+alter table public.appable_conversations enable row level security;
+alter table public.appable_messages enable row level security;
+
+do $$ begin
+  if not exists (
+    select 1 from pg_policies where tablename = 'appable_conversations' and policyname = 'appable_conversations_participant'
+  ) then
+    create policy appable_conversations_participant on public.appable_conversations
+      for all using (auth.uid() = owner_id or auth.uid() = walker_id);
+  end if;
+  if not exists (
+    select 1 from pg_policies where tablename = 'appable_messages' and policyname = 'appable_messages_participant'
+  ) then
+    create policy appable_messages_participant on public.appable_messages
+      for all using (
+        exists (
+          select 1 from public.appable_conversations c
+          where c.id = conversation_id
+            and (c.owner_id = auth.uid() or c.walker_id = auth.uid())
+        )
+      );
+  end if;
+end $$;
+`.trim();

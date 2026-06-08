@@ -132,6 +132,8 @@ export interface ProjectSupabaseConnector {
   serviceRoleKeyEnc: string;
   /** Verifies POST /api/webhooks/supabase/[projectId] */
   webhookSecretEnc?: string;
+  /** Supabase management token — lets Build run schema extensions (encrypted). */
+  managementTokenEnc?: string;
 }
 
 export type RevenueCatConnectorStatus = "connected" | "disconnected";

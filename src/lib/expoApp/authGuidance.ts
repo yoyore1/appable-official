@@ -11,13 +11,13 @@ export const AUTH_OAUTH_SETUP_HINT =
 export function authChecklistWhy(authInPreview: boolean): string {
   if (authInPreview) {
     return (
-      "Sign-up is in the preview (Google, Apple, and email). " +
+      "Sign-up and sign-in are in the preview (Google, Apple, and email). " +
       "Email works with your linked Supabase now — enable Google/Apple providers before App Store launch."
     );
   }
   return (
     "People need accounts that follow them across devices. " +
-    "Ship with Google + Apple sign-in (best UX) plus email as a fallback."
+    "Ship with Google + Apple sign-in (best UX) plus email sign-up and sign-in as a fallback."
   );
 }
 
@@ -29,5 +29,5 @@ export function authBrainstormPillPrompt(appName: string): string {
 }
 
 export function authBuildPillPrompt(appName: string): string {
-  return `Add sign-up to ${appName} with Continue with Google, Continue with Apple, and email.`;
+  return `Add sign-up and sign-in to ${appName} with Continue with Google, Continue with Apple, and email.`;
 }

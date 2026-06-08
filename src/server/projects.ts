@@ -642,16 +642,23 @@ export async function expoTweakChat(
   const brainstormContext = formatBrainstormContextForBuild(
     project.brainstormState,
     readinessNote,
-    formatConnectorContextForCoach(connectorState, connectorNeeds, audit)
+    formatConnectorContextForCoach(connectorState, connectorNeeds, audit),
+    project.expoAppModel
   );
 
   const { result, charge } = await runWithAiBilling(
     billingScope(project, false),
     () =>
       applyExpoTweak(project.expoAppModel!, mp, message, {
+        projectId,
         brainstormContext,
+        brainstormHistory: project.brainstormState?.history ?? [],
         connectorState,
         connectorNeeds,
+        applyMessagingSchema: async (id) => {
+          const { applyMessagingSchemaToProject } = await import("@/server/connectors");
+          return applyMessagingSchemaToProject(id);
+        },
       })
   );
   if (!charge.ok) {

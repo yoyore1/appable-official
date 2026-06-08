@@ -112,7 +112,7 @@ function Row({
         </span>
       </button>
 
-      {onDecision && item.status !== "have" && (
+      {onDecision && (
         <div className="mt-1.5 flex flex-wrap gap-1 pl-4">
           {DECISION_OPTIONS.map((d) => (
             <button
@@ -151,12 +151,9 @@ export function ReadinessChecklist({
   className?: string;
 }) {
   const { blockers, rest } = useMemo(() => {
-    const blockers = audit.items.filter(
-      (i) => i.priority === "launch_blocker" && i.status !== "have"
-    );
-    const rest = audit.items.filter(
-      (i) => !(i.priority === "launch_blocker" && i.status !== "have")
-    );
+    // Essentials stay under "Before you ship" even when preview-ready or marked Done.
+    const blockers = audit.items.filter((i) => i.priority === "launch_blocker");
+    const rest = audit.items.filter((i) => i.priority !== "launch_blocker");
     return { blockers, rest };
   }, [audit.items]);
 

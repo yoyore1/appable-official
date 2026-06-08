@@ -18,9 +18,10 @@ import { PreviewFixPanel } from "@/components/PreviewFixPanel";
 import { ExpoLivePreview } from "@/components/ExpoLivePreview";
 import { ExpoPhoneGuide } from "@/components/ExpoPhoneGuide";
 import { PreviewCanvasPicker } from "@/components/PreviewCanvasPicker";
-import { BrainstormBuildHandoff } from "@/components/BrainstormBuildHandoff";
+import { FloatingBuildHandoff } from "@/components/FloatingBuildHandoff";
 import { BuildSidePanel } from "@/components/BuildSidePanel";
 import { ReadinessSuggestionBar } from "@/components/ReadinessSuggestionBar";
+import { resolveBuildHandoff } from "@/lib/expoApp/buildHandoff";
 import { defaultBrainstormState } from "@/lib/expoApp/brainstormContext";
 import { TypingIndicator } from "@/components/TypingIndicator";
 import { formatBuildRecap } from "@/lib/expoApp/buildRecap";
@@ -254,6 +255,14 @@ export function ExpoBuildRoom({
     return readinessSuggestions[0]?.id ?? null;
   }, [activeSuggestionId, readinessSuggestions, readinessState.pinnedItemId]);
 
+  const buildHandoff = useMemo(
+    () =>
+      resolveBuildHandoff({
+        history: brainstormState.history,
+      }),
+    [brainstormState.history]
+  );
+
   function pickReadinessSuggestion(suggestion: ReadinessSuggestion) {
     setActiveSuggestionId(suggestion.id);
     setTweakInput(
@@ -321,14 +330,41 @@ export function ExpoBuildRoom({
     });
   }
 
-  function handoffToBuild(prompt: string) {
+  function submitBuildMessage(msg: string) {
+    const trimmed = msg.trim();
+    if (!trimmed || busy || chatSubmittingRef.current) return;
+
+    setBusy(true);
+    chatSubmittingRef.current = true;
+    setBubbles((b) => [...b, { id: `tu-${Date.now()}`, role: "user", text: trimmed }]);
+
+    void expoTweakChat(projectId, trimmed)
+      .then((res) => {
+        if (res.ok) setAppModel(res.model);
+        setBudgetKey((k) => k + 1);
+        setBubbles((b) => [
+          ...b,
+          {
+            id: `ta-${Date.now()}`,
+            role: "ai",
+            text: res.ok ? res.reply : res.message,
+          },
+        ]);
+      })
+      .finally(() => {
+        setBusy(false);
+        chatSubmittingRef.current = false;
+      });
+  }
+
+  function handoffToBuildAndRun(prompt: string) {
     setChatMode("build");
-    setTweakInput(prompt);
+    setTweakInput("");
     setBrainstormState((s) => ({ ...s, pendingBuild: null }));
     void clearBrainstormBuildSuggestion(projectId).then((res) => {
       if (res.ok) setBrainstormState(res.brainstormState);
     });
-    requestAnimationFrame(() => chatInputRef.current?.focus());
+    submitBuildMessage(prompt);
   }
 
   const [editForm, setEditForm] = useState({
@@ -568,6 +604,12 @@ export function ExpoBuildRoom({
 
   const previewReady = phase === "done" && Boolean(appModel);
 
+  const showFloatingBuild =
+    phase === "done" &&
+    chatMode === "brainstorm" &&
+    Boolean(buildHandoff?.show) &&
+    !busy;
+
   useEffect(() => {
     if (phase === "building" || previewReady) {
       void fetch("/api/expo/start", { method: "POST" });
@@ -749,13 +791,14 @@ export function ExpoBuildRoom({
               )}
             </div>
 
-            {chatMode === "brainstorm" && brainstormState.pendingBuild && (
-              <BrainstormBuildHandoff
-                suggestion={brainstormState.pendingBuild}
-                busy={busy}
-                onBuild={() => handoffToBuild(brainstormState.pendingBuild!.prompt)}
-              />
-            )}
+            <FloatingBuildHandoff
+              visible={showFloatingBuild}
+              label={buildHandoff?.label ?? "Build it"}
+              busy={busy}
+              onBuild={() => {
+                if (buildHandoff?.prompt) handoffToBuildAndRun(buildHandoff.prompt);
+              }}
+            />
 
             {readinessSuggestions.length > 0 && (
               <ReadinessSuggestionBar
@@ -837,25 +880,7 @@ export function ExpoBuildRoom({
                   return;
                 }
 
-                setBubbles((b) => [...b, { id: `tu-${Date.now()}`, role: "user", text: msg }]);
-
-                void expoTweakChat(projectId, msg)
-                  .then((res) => {
-                    if (res.ok) setAppModel(res.model);
-                    setBudgetKey((k) => k + 1);
-                    setBubbles((b) => [
-                      ...b,
-                      {
-                        id: `ta-${Date.now()}`,
-                        role: "ai",
-                        text: res.ok ? res.reply : res.message,
-                      },
-                    ]);
-                  })
-                  .finally(() => {
-                    setBusy(false);
-                    chatSubmittingRef.current = false;
-                  });
+                submitBuildMessage(msg);
               }}
             >
               <textarea

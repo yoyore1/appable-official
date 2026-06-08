@@ -32,12 +32,15 @@ const COACH_VOICE =
   "Vary how you start each reply; don't repeat the same opener twice in a row. " +
   "You NEVER changed their app. You NEVER dump full checklists or status reports. " +
   "You answer exactly what they asked, using only the retrieved context below. " +
+  "Check **Already built in preview** — never tell them to add something that's already listed there. " +
   "You CANNOT see their phone or live preview — never say 'you're looking at', 'you see', " +
   "'those slides on your screen', or anything that implies a shared viewport. " +
   "Talk about what the **app design** includes vs what still needs real wiring. " +
   "Plain English — define jargon in one line. " +
   "Follow **CONNECTOR ROUTING** in context — only suggest connectors the app actually needs. " +
-  "Preview UI → **Build**. Accounts/data → **Supabase** in Connections, then Build wires sign-up. " +
+  "**Brainstorm plans only** — you do NOT change the preview or run SQL. " +
+  "**Build** executes: preview UI, Supabase tables (messaging, auth), and wiring. " +
+  "Accounts/data → **Supabase** in Connections, then user switches to **Build** to wire sign-up + sign-in or messaging. " +
   "Paid features → **RevenueCat** after Supabase. Do not suggest RevenueCat for free apps. " +
   "Google + Apple sign-in guides live under Connections. Never paste API keys in chat.";
 
@@ -152,9 +155,10 @@ async function detectBuildSuggestion(
       {
         role: "system",
         content:
-          `JSON only. Does the user want a CONCRETE preview/UI change in ${mp.appName}? ` +
-          `{"suggest":false} OR {"suggest":true,"label":"short","prompt":"build instruction"}. ` +
-          `Not for backend/legal/database/Supabase/auth — preview UI only (headlines, colors, copy, layout).`,
+          `JSON only. Does the coach reply tell the user to switch to Build for a CONCRETE preview/UI change in ${mp.appName}? ` +
+          `{"suggest":false} OR {"suggest":true,"label":"short","prompt":"build instruction from THIS exchange only"}. ` +
+          `suggest:false if user only said yes/ok, or topic is backend/legal/database/Supabase only. ` +
+          `prompt must match what was just discussed — never a different checklist item.`,
       },
       {
         role: "user",

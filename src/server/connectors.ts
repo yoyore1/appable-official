@@ -166,6 +166,28 @@ export async function disconnectSupabaseFromProject(
   return { ok: true };
 }
 
+export async function applyMessagingSchemaToProject(
+  projectId: string
+): Promise<{ ok: true } | { ok: false; message: string }> {
+  const access = await resolveProjectAccess(projectId);
+  if (!access.ok) return { ok: false, message: "Project not found." };
+  const connector = access.project.supabaseConnector;
+  if (!connector || connector.public.status === "disconnected") {
+    return { ok: false, message: "Connect Supabase in Connections first." };
+  }
+  const { runMessagingSchemaSetup } = await import("@/lib/connectors/supabaseConnector");
+  const result = await runMessagingSchemaSetup(connector);
+  if (result.ok) {
+    const next = {
+      ...connector,
+      public: { ...connector.public, schemaVersion: Math.max(connector.public.schemaVersion, 2) },
+    };
+    await db.updateProject(projectId, { supabaseConnector: next });
+    revalidatePath(`/project/${projectId}/expo`);
+  }
+  return result;
+}
+
 export async function getSupabaseConnectorStatus(
   projectId: string
 ): Promise<SupabaseConnectorPublic | null> {

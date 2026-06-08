@@ -4,6 +4,7 @@ import type {
 } from "@/lib/types";
 import { encryptConnectorSecret, decryptConnectorSecret } from "./encrypt";
 import {
+  APPABLE_MESSAGING_SETUP_SQL,
   APPABLE_SUPABASE_SETUP_SQL,
   fetchSupabaseApiKeys,
   listSupabaseProjects,
@@ -87,7 +88,36 @@ export async function linkSupabaseProject(input: {
     anonKeyEnc: encryptConnectorSecret(keys.anonKey),
     serviceRoleKeyEnc: encryptConnectorSecret(keys.serviceRoleKey),
     webhookSecretEnc: encryptConnectorSecret(webhookSecret),
+    managementTokenEnc: encryptConnectorSecret(input.accessToken.trim()),
   };
+}
+
+/** Run messaging schema on a linked project (requires management token from connect). */
+export async function runMessagingSchemaSetup(
+  connector: ProjectSupabaseConnector
+): Promise<{ ok: true } | { ok: false; message: string }> {
+  const tokenEnc = connector.managementTokenEnc;
+  if (!tokenEnc) {
+    return {
+      ok: false,
+      message:
+        "Reconnect Supabase in Connections so Build can create tables — or paste the SQL from the Supabase dashboard.",
+    };
+  }
+  const accessToken = decryptConnectorSecret(tokenEnc);
+  try {
+    await runSupabaseSetupSql(
+      accessToken,
+      connector.public.projectRef,
+      APPABLE_MESSAGING_SETUP_SQL
+    );
+    return { ok: true };
+  } catch (err) {
+    return {
+      ok: false,
+      message: err instanceof Error ? err.message.slice(0, 200) : "Schema setup failed",
+    };
+  }
 }
 
 /** Builder / service API — includes decrypted keys. */

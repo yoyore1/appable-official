@@ -6,9 +6,19 @@ import {
   type ProjectConnectorState,
 } from "@/lib/connectors/registry";
 import {
-  wantsSupabasePreviewWork,
-  wireSupabaseAuthInPreview,
-} from "./applySupabasePreview";
+  wantsAuthPreviewWork,
+  wantsMessagingBackendWork,
+  wireMessagingInPreview,
+} from "./applyMessagingPreview";
+import { wireSupabaseAuthInPreview } from "./applySupabasePreview";
+import { buildAgentBuiltStateBlock } from "./builtState";
+import {
+  expandBuildMessageFromContext,
+  inferBuildTaskFromContext,
+  isBuildExecutionMessage,
+} from "./resolveBuildIntent";
+import { withLegalSettings } from "./smartInteractions";
+import type { BrainstormTurn } from "@/lib/types";
 import type { ExpoAppModel } from "./types";
 
 const THINKING =
@@ -16,30 +26,45 @@ const THINKING =
 
 export interface ApplyExpoTweakOptions {
   brainstormContext?: string;
+  brainstormHistory?: BrainstormTurn[];
+  projectId?: string;
   /** @deprecated use connectorState */
   supabaseConnected?: boolean;
   connectorState?: ProjectConnectorState;
   connectorNeeds?: ConnectorId[];
+  /** Server-only: apply Supabase messaging DDL when connected. */
+  applyMessagingSchema?: (projectId: string) => Promise<{ ok: true } | { ok: false; message: string }>;
 }
 
-function cleanReply(text: string): string {
+function isBackendishRequest(message: string): boolean {
+  return wantsMessagingBackendWork(message) || wantsAuthPreviewWork(message);
+}
+
+function cleanReply(text: string, message: string): string {
+  const backend = isBackendishRequest(message);
   const t = text.trim();
   if (!t || THINKING.test(t)) {
-    return "I couldn't change the preview from that — try something visual, like “shorten the home headline.”";
+    return backend
+      ? "I couldn't apply that yet — connect Supabase in Connections if you need live tables, then ask Build again with specifics."
+      : "I couldn't change the preview from that — try rephrasing (e.g. “wire messaging” or “shorten the home headline”).";
   }
   const first = t.split(/\n+/).find((line) => line.trim() && !THINKING.test(line)) ?? t;
-  return first.slice(0, 200);
+  return first.slice(0, 280);
 }
 
-/** @deprecated use wantsSupabasePreviewWork — kept for brainstorm handoff filter */
+/** @deprecated use wantsAuthPreviewWork — kept for brainstorm handoff filter */
 export function isBackendBuildRequest(message: string): boolean {
-  return wantsSupabasePreviewWork(message);
+  return wantsAuthPreviewWork(message) || wantsMessagingBackendWork(message);
 }
 
 function tryRules(
   model: ExpoAppModel,
   msg: string
 ): { model: ExpoAppModel; reply: string } | null {
+  if (isBuildExecutionMessage(msg) || isBackendishRequest(msg)) {
+    return null;
+  }
+
   const m = msg.toLowerCase();
 
   if (/profile|settings/.test(m) && /work|fix|button|tap|click|broken|none/.test(m)) {
@@ -92,7 +117,7 @@ function tryRules(
   return null;
 }
 
-/** Apply a post-build tweak — preview UI + Supabase sign-up wiring in the web preview. */
+/** Apply a post-build tweak — preview UI, Supabase auth, messaging tables + chat UI. */
 export async function applyExpoTweak(
   model: ExpoAppModel,
   mp: MasterBuildPrompt,
@@ -100,6 +125,15 @@ export async function applyExpoTweak(
   options: ApplyExpoTweakOptions = {}
 ): Promise<{ model: ExpoAppModel; reply: string }> {
   const brainstormContext = options.brainstormContext;
+  const brainstormHistory = options.brainstormHistory ?? [];
+  const userMessage = message.trim();
+  const effectiveMessage = expandBuildMessageFromContext(
+    userMessage,
+    brainstormHistory,
+    brainstormContext
+  );
+  const builtStateNote = buildAgentBuiltStateBlock(model);
+
   const connectorState: ProjectConnectorState =
     options.connectorState ??
     ({
@@ -110,60 +144,162 @@ export async function applyExpoTweak(
       railway: null,
     } satisfies ProjectConnectorState);
   const connectorNeeds = options.connectorNeeds ?? ["supabase"];
+  const supabaseConnected =
+    Boolean(connectorState.supabase) && connectorState.supabase!.status !== "disconnected";
 
-  const routing = buildConnectorRouting(message, connectorState, connectorNeeds);
+  const routing = buildConnectorRouting(effectiveMessage, connectorState, connectorNeeds);
   if (routing.connectorReply) {
     return { model, reply: routing.connectorReply };
   }
 
-  if (wantsSupabasePreviewWork(message) || routing.supabaseWire) {
-    if (!connectorState.supabase || connectorState.supabase.status === "disconnected") {
+  if (wantsMessagingBackendWork(effectiveMessage)) {
+    if (/read receipt/.test(effectiveMessage.toLowerCase())) {
       return {
         model,
         reply:
-          "I can add sign-up to the preview once Supabase is linked — open **Connections → Connect Supabase** on the right, then tell me again.",
+          "Skipping read receipts for v1 — they add pressure and extra schema. " +
+          "Build wired simple chat (sender_id + text) instead. Say “wire messaging” if you want the Messages tab + tables.",
+      };
+    }
+
+    if (!supabaseConnected) {
+      return {
+        model,
+        reply:
+          "Messaging needs Supabase — open **Connections → Connect Supabase**, then ask Build to “wire messaging” (preview UI + conversations/messages tables).",
+      };
+    }
+
+    const wired = wireMessagingInPreview(model, mp);
+    let reply = wired.reply;
+
+    if (options.projectId && options.applyMessagingSchema) {
+      const schema = await options.applyMessagingSchema(options.projectId);
+      if (schema.ok) {
+        reply += " Created appable_conversations + appable_messages in your Supabase project.";
+      } else {
+        reply += ` Preview is ready — ${schema.message}`;
+      }
+    }
+
+    return { model: wired.model, reply };
+  }
+
+  if (wantsAuthPreviewWork(effectiveMessage) || routing.supabaseWire) {
+    if (!supabaseConnected) {
+      return {
+        model,
+        reply:
+          "I can add sign-up and sign-in to the preview once Supabase is linked — open **Connections → Connect Supabase** on the right, then tell me again.",
       };
     }
     return wireSupabaseAuthInPreview(model, mp);
   }
 
-  const ruled = tryRules(model, message);
+  if (
+    /sign[\s-]?out|delete account|account controls/.test(effectiveMessage.toLowerCase()) &&
+    !wantsMessagingBackendWork(effectiveMessage)
+  ) {
+    const next = withLegalSettings(model);
+    return {
+      model: next,
+      reply: "Done — Profile settings now include Sign out and Delete account.",
+    };
+  }
+
+  const ruled = tryRules(model, effectiveMessage);
   if (ruled) return ruled;
 
-  const contextBlock = brainstormContext?.trim()
-    ? `\n\nBrainstorm context (user may reference "what we discussed"):\n${brainstormContext.trim()}`
-    : "";
+  const contextBlock = [
+    builtStateNote,
+    brainstormContext?.trim()
+      ? `Brainstorm context (user may reference "what we discussed"):\n${brainstormContext.trim()}`
+      : "",
+  ]
+    .filter(Boolean)
+    .join("\n\n");
+
+  const userPrompt =
+    effectiveMessage !== userMessage
+      ? `User said: "${userMessage}" (means: ${effectiveMessage})`
+      : `User request: ${userMessage}`;
 
   const llm = await chatReply(
-    `You are the BUILD agent for ${mp.appName}'s live preview. You change demo UI (headlines, colors, tab labels, copy). ` +
-      `Follow CONNECTOR ROUTING in brainstorm context — right connector in Connections, not random tools. ` +
-      `Otherwise reply with ONE short sentence (max 25 words) confirming a preview change, or say what to try. ` +
-      `NEVER mention Save on cards unless they asked about saving favorites.` +
-      contextBlock,
-    `Current headline: "${model.home.headline}". User request: ${message}`,
-    100
+    `You are the BUILD agent for ${mp.appName}. You change the live preview AND wire backend when Supabase is connected. ` +
+      `You can: UI copy/colors/tabs, sign-up + sign-in/auth, messaging tables + Messages tab, profile settings. ` +
+      `NEVER remove existing tabs when adding features — append a tab or reuse Alerts/Notifications. ` +
+      `Use recent brainstorm context when the user says yes/ready/proceed — execute what you were just planning. ` +
+      `Reply with ONE short sentence (max 35 words) confirming what you did.` +
+      (contextBlock ? `\n\n${contextBlock}` : ""),
+    `Current headline: "${model.home.headline}". ${userPrompt}`,
+    120
   );
 
-  if (llm && /headline|title|home/.test(message.toLowerCase())) {
+  if (llm && /headline|title|home/.test(effectiveMessage.toLowerCase())) {
     const quoted = llm.match(/"([^"]+)"/)?.[1];
     if (quoted) {
       return {
         model: { ...model, home: { ...model.home, headline: quoted } },
-        reply: cleanReply(`Home headline → "${quoted}"`),
+        reply: cleanReply(`Home headline → "${quoted}"`, effectiveMessage),
       };
     }
   }
 
-  const reply = cleanReply(llm);
+  const reply = cleanReply(llm, effectiveMessage);
   const soundsGeneric =
-    /save is on every card|open any card|tap around|try tapping|collection button/i.test(
+    /save is on every card|open any card|tap around|try tapping|collection button|only do visual|shorten the home headline|didn't change the preview/i.test(
       reply
     );
   if (soundsGeneric) {
+    const task = inferBuildTaskFromContext(brainstormHistory, brainstormContext);
+
+    if (task === "messaging") {
+      if (!supabaseConnected) {
+        return {
+          model,
+          reply:
+            "Messaging needs Supabase — connect it in Connections, then ask Build to “wire messaging”.",
+        };
+      }
+      const wired = wireMessagingInPreview(model, mp);
+      let finalReply = wired.reply;
+      if (options.projectId && options.applyMessagingSchema) {
+        const schema = await options.applyMessagingSchema(options.projectId);
+        if (schema.ok) {
+          finalReply += " Created appable_conversations + appable_messages in Supabase.";
+        } else {
+          finalReply += ` ${schema.message}`;
+        }
+      }
+      return { model: wired.model, reply: finalReply };
+    }
+
+    if (task === "auth" && supabaseConnected) {
+      return wireSupabaseAuthInPreview(model, mp);
+    }
+
+    if (task === "auth" && !supabaseConnected) {
+      return {
+        model,
+        reply:
+          "Connect Supabase in Connections first, then ask Build to wire sign-up and sign-in.",
+      };
+    }
+
+    if (task === "sign_out") {
+      return {
+        model: withLegalSettings(model),
+        reply: "Done — Profile settings now include Sign out and Delete account.",
+      };
+    }
+
     return {
       model,
-      reply:
-        "I didn't change the preview for that. Try a visual tweak — e.g. “shorten the home headline” or “make the accent brighter.”",
+      reply: isBackendishRequest(effectiveMessage)
+        ? "Try: “wire messaging” or “add sign-up and sign-in with Supabase” — Build handles backend and UI."
+        : userMessage !== effectiveMessage
+          ? `Working on what we discussed — if nothing changed, say “wire messaging” or “create the tables”.`
+          : "I didn't change the preview for that — try something specific (headline, colors, messaging, or auth).",
     };
   }
 

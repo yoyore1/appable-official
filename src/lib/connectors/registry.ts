@@ -67,7 +67,7 @@ const REGISTRY: ConnectorDefinition[] = [
     ],
     suggestPriority: 1,
     whenMissing:
-      "Connect **Supabase** in Connections (not Build) — needed for sign-in, saving user data, and chat. Email test works in preview after connect + Build wire sign-up.",
+      "Connect **Supabase** in Connections (not Build) — needed for sign-in, saving user data, and chat. Email test works in preview after connect + Build wires sign-up and sign-in.",
     whenConnected: (s) => {
       const pub = s.supabase!;
       if (pub.status === "setup_failed") {
@@ -75,7 +75,7 @@ const REGISTRY: ConnectorDefinition[] = [
       }
       return (
         `Supabase connected ("${pub.projectName}"). Auth + appable_profiles ready. ` +
-        `Build wires sign-up in preview; Google/Apple setup is under Connections.`
+        `Build wires sign-up and sign-in in preview; Google/Apple setup is under Connections.`
       );
     },
     patchAuditItem: (item, state) => {
@@ -387,7 +387,8 @@ export function formatConnectorContextForCoach(
   }
 
     lines.push(
-      "- Sign-in / accounts → **Connections: Supabase**, then **Build** to wire preview. Google/Apple guides are in Connections.",
+      "- Sign-in / accounts → **Connections: Supabase**, then **Build** to wire preview + auth.",
+      "- Messaging / tables → **Build** (preview Messages tab + Supabase conversations/messages). Brainstorm only plans.",
       "- Subscriptions / paywall → **RevenueCat** only if app charges money; requires Supabase first.",
       "- Custom API / workers / cron → **Railway** only when the app truly needs its own server — not for basic auth or lists.",
       "- Never tell users to paste API keys in chat. Never send database work to Build without Supabase connected."
@@ -447,18 +448,26 @@ export function buildConnectorRouting(
 } {
   const m = message.toLowerCase();
 
+  const wantsMessagingSchema =
+    /messag|chat|inbox|conversation|sender_id|thread/.test(m) &&
+    /table|schema|wire|add|create|database|supabase|build/.test(m);
   const wantsAuth =
-    /supabase|auth|sign[\s-]?up|sign[\s-]?in|account|register|backend|database|wire/.test(m);
+    !wantsMessagingSchema &&
+    /supabase|auth|sign[\s-]?up|sign[\s-]?in|account|register|wire/.test(m);
   const wantsPayments = /revenuecat|subscription|paywall|in-app purchase|payment/.test(m);
 
-  if (wantsAuth || /wire/.test(m) && /sign|auth|account/.test(m)) {
+  if (wantsMessagingSchema) {
+    return { supabaseWire: false, connectorReply: null };
+  }
+
+  if (wantsAuth || (/wire/.test(m) && /sign|auth|account/.test(m))) {
     if (!isConnectorConnected("supabase", state)) {
       const rec = getConnectorRecommendations(state, needs).find((r) => r.id === "supabase");
       return {
         supabaseWire: false,
         connectorReply:
           rec?.reason ??
-          "Link **Supabase** in Connections first, then ask Build to wire sign-up in the preview.",
+          "Link **Supabase** in Connections first, then ask Build to wire sign-up and sign-in in the preview.",
       };
     }
     return { supabaseWire: true, connectorReply: null };

@@ -65,7 +65,12 @@ export interface ExpoAuthFlow {
   liveSupabase?: boolean;
   signUpTitle: string;
   signUpSubtitle?: string;
+  /** Primary CTA on the sign-up tab. */
   submitLabel: string;
+  signInTitle: string;
+  signInSubtitle?: string;
+  /** Primary CTA on the sign-in tab. */
+  signInSubmitLabel: string;
   captureName: boolean;
   /** Owner / walker on the same screen as email + password. */
   captureRoleInSignUp: boolean;

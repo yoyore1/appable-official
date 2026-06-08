@@ -28,7 +28,7 @@ export function enrichOAuthSetupStatus(
             ? "Google login is configured — users can tap Continue with Google in your app."
             : status === "partial"
               ? "Buttons are in the preview. Follow the Google guide under Connections (copy-paste URLs) — email still works for testing."
-              : "One-tap Google login — set up after basic sign-up is in the preview.",
+              : "One-tap Google login — set up after sign-up and sign-in are in the preview.",
         inPreview: authInPreview,
       };
     }

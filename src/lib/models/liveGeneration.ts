@@ -19,8 +19,15 @@ import {
   visionComplete,
 } from "@/lib/deepinfra";
 import { generateSeedanceVideo } from "@/lib/fal";
-import { routeModelForCapability, isTaskConfigured } from "@/lib/models/router";
-import type { ModelTask } from "@/lib/models/router";
+import {
+  classifyComplexity,
+  endpointForTask,
+  routeModelForCapability,
+  isTaskConfigured,
+  shouldUseOpenRouter,
+} from "@/lib/models/router";
+import type { ComplexityTier, ModelTask } from "@/lib/models/router";
+import { openRouterChatComplete } from "@/lib/openrouter";
 import type { UserAccount } from "@/lib/types";
 
 export type LiveGenerationInput = {
@@ -47,14 +54,17 @@ export type LiveGenerationResult =
 
 export function checkLiveGenerationBudget(
   user: Pick<UserAccount, "aiUsageUsd" | "ttsCharsUsed">,
-  capability: string
-): LiveGenerationResult | { ok: true; task: ModelTask } {
+  capability: string,
+  input: LiveGenerationInput = {}
+): LiveGenerationResult | { ok: true; task: ModelTask; complexity: ComplexityTier } {
   const task = routeModelForCapability(capability);
-  if (!isTaskConfigured(task)) {
+  const complexity = classifyComplexity(capability, { text: input.text });
+  if (!isTaskConfigured(task, complexity)) {
     return {
       ok: false,
       reason: "not_configured",
-      message: "Add DEEPINFRA_API_KEY (and FAL_KEY for video) to .env.local.",
+      message:
+        "Add DEEPINFRA_API_KEY (and OPENROUTER_API_KEY for premium tasks, FAL_KEY for video) to .env.local.",
     };
   }
   if (
@@ -70,13 +80,14 @@ export function checkLiveGenerationBudget(
         "You've used your free AI generations. Connect your own API key to keep going.",
     };
   }
-  return { ok: true, task };
+  return { ok: true, task, complexity };
 }
 
 async function dispatchTask(
   task: ModelTask,
   capability: string,
-  input: LiveGenerationInput
+  input: LiveGenerationInput,
+  complexity: ComplexityTier = "simple"
 ): Promise<{
   output: string;
   costUsd: number;
@@ -89,6 +100,23 @@ async function dispatchTask(
   switch (task) {
     case "vision": {
       if (!input.imageUrl) throw new Error("imageUrl required for vision");
+      if (shouldUseOpenRouter(task, complexity)) {
+        const endpoint = endpointForTask(task, complexity);
+        const { text, costUsd } = await openRouterChatComplete(
+          [
+            {
+              role: "user",
+              content: [
+                { type: "text", text: input.text ?? capability },
+                { type: "image_url", image_url: { url: input.imageUrl } },
+              ],
+            },
+          ],
+          { model: endpoint.name, maxTokens: 1024 }
+        );
+        if (!text) throw new Error("Vision model returned no text");
+        return { output: text, costUsd };
+      }
       const vision = await visionComplete({
         imageUrl: input.imageUrl,
         prompt: input.text ?? capability,
@@ -170,11 +198,11 @@ export async function runLiveGeneration(
   capability: string,
   input: LiveGenerationInput = {}
 ): Promise<LiveGenerationResult> {
-  const gate = checkLiveGenerationBudget(user, capability);
+  const gate = checkLiveGenerationBudget(user, capability, input);
   if (!("task" in gate)) return gate;
 
   try {
-    const result = await dispatchTask(gate.task, capability, input);
+    const result = await dispatchTask(gate.task, capability, input, gate.complexity);
     if (result.costUsd > 0) {
       await recordAiSpend(user.id, result.costUsd, result.ttsChars ?? 0);
     }

@@ -1,16 +1,15 @@
 import type { MasterBuildPrompt } from "@/lib/types";
 import type { ExpoAppModel, ExpoAuthFlow } from "./types";
+import { wantsAuthPreviewWork, wantsMessagingBackendWork } from "./applyMessagingPreview";
 
+/** @deprecated use wantsAuthPreviewWork or wantsMessagingBackendWork */
 export function wantsSupabasePreviewWork(message: string): boolean {
-  const m = message.toLowerCase();
-  return (
-    /supabase|firebase|backend|database|wire|auth|sign[\s-]?up|sign[\s-]?in|log[\s-]?in|create a user|has_completed_onboarding|onboarding flag|account|register/.test(
-      m
-    )
-  );
+  return wantsAuthPreviewWork(message) || wantsMessagingBackendWork(message);
 }
 
-/** Patch preview model so Build mode adds a real sign-up flow (web preview). */
+export { wantsAuthPreviewWork, wantsMessagingBackendWork };
+
+/** Patch preview model so Build mode adds sign-up + sign-in (web preview). */
 export function wireSupabaseAuthInPreview(
   model: ExpoAppModel,
   mp: MasterBuildPrompt
@@ -28,6 +27,11 @@ export function wireSupabaseAuthInPreview(
       ? "Google, Apple, or email — then pick owner or walker."
       : "Continue with Google or Apple — or use email to test.",
     submitLabel: "Sign up with email",
+    signInTitle: `Welcome back to ${mp.appName}`,
+    signInSubtitle: dualSided
+      ? "Google, Apple, or email — returning owners and walkers."
+      : "Continue with Google or Apple — or sign in with email.",
+    signInSubmitLabel: "Sign in with email",
     captureName: true,
     captureRoleInSignUp: dualSided,
     showGoogleSignIn: true,
@@ -49,10 +53,10 @@ export function wireSupabaseAuthInPreview(
   };
 
   const reply = already
-    ? `Sign-up is already on the preview — Google, Apple, and email${dualSided ? " (+ role pick)" : ""}. Use email to test against your Supabase; turn on Google/Apple providers before launch.`
+    ? `Sign-up and sign-in are already on the preview — Google, Apple, and email${dualSided ? " (+ role pick on sign-up)" : ""}. Use email to test; turn on Google/Apple providers before launch.`
     : dualSided
-      ? "Done — sign-up is on the preview: Google, Apple, and email with owner/walker. Test with email now; enable Google/Apple in Supabase before the App Store."
-      : "Done — sign-up is on the preview with Google, Apple, and email. Test with email against your Supabase; enable Google/Apple providers when you launch.";
+      ? "Done — sign-up and sign-in are on the preview: Google, Apple, and email with owner/walker on sign-up. Test with email now; enable Google/Apple in Supabase before the App Store."
+      : "Done — sign-up and sign-in are on the preview with Google, Apple, and email. Test with email against your Supabase; enable Google/Apple providers when you launch.";
 
   return { model: next, reply };
 }

@@ -45,6 +45,7 @@ import type {
   ExpoListItem,
   ExpoUserRole,
 } from "@/lib/expoApp/types";
+import { completeAuthFlow } from "@/lib/expoApp/authFlowDefaults";
 import { imageForCategory } from "@/lib/expoApp/images";
 import {
   applyImageFallbacks,
@@ -796,9 +797,10 @@ export function ExpoLivePreview({
               ) : launchPhase === "auth" &&
                 readyModel.flow?.auth?.enabled &&
                 readyModel.flow ? (
-                <AuthSignUpScreen
+                <AuthScreen
                   key="auth"
                   projectId={projectId}
+                  appName={readyModel.profile.displayName}
                   flow={readyModel.flow}
                   theme={t}
                   onSuccess={finishAuthSignUp}
@@ -1498,20 +1500,24 @@ function RoleSelectScreen({
   );
 }
 
-function AuthSignUpScreen({
+function AuthScreen({
   projectId,
+  appName,
   flow,
   theme,
   onSuccess,
 }: {
   projectId?: string;
+  appName: string;
   flow: ExpoAppFlow;
   theme: ExpoAppModel["theme"];
   onSuccess: (role: ExpoUserRole | null) => void;
 }) {
-  const auth = flow.auth!;
+  const rawAuth = flow.auth!;
+  const auth = completeAuthFlow(rawAuth, appName);
   const t = theme;
   const roles = flow.roles ?? [];
+  const [mode, setMode] = useState<"signUp" | "signIn">("signUp");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [name, setName] = useState("");
@@ -1519,6 +1525,7 @@ function AuthSignUpScreen({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  const isSignUp = mode === "signUp";
   const showGoogle = auth.showGoogleSignIn !== false;
   const showApple = auth.showAppleSignIn !== false;
   const showOAuth = showGoogle || showApple;
@@ -1526,16 +1533,17 @@ function AuthSignUpScreen({
   const canSubmit =
     email.trim().includes("@") &&
     password.length >= 6 &&
-    (!auth.captureName || name.trim().length > 0) &&
-    (!auth.captureRoleInSignUp || roleId);
+    (!isSignUp || !auth.captureName || name.trim().length > 0) &&
+    (!isSignUp || !auth.captureRoleInSignUp || roleId);
 
   function pickRoleAfterAuth(): ExpoUserRole | null {
+    if (!isSignUp) return null;
     const picked = roles.find((r) => r.id === roleId) ?? null;
     return auth.captureRoleInSignUp ? picked : null;
   }
 
   function requireRoleForOAuth(): boolean {
-    if (!auth.captureRoleInSignUp || roleId) return true;
+    if (!isSignUp || !auth.captureRoleInSignUp || roleId) return true;
     setError("Pick owner or walker first, then continue with Google or Apple.");
     return false;
   }
@@ -1581,24 +1589,38 @@ function AuthSignUpScreen({
     setError(null);
     try {
       if (auth.liveSupabase && projectId) {
-        const res = await fetch(`/api/projects/${projectId}/preview-signup`, {
+        const endpoint = isSignUp ? "preview-signup" : "preview-signin";
+        const res = await fetch(`/api/projects/${projectId}/${endpoint}`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            email: email.trim(),
-            password,
-            displayName: name.trim(),
-            role: auth.captureRoleInSignUp ? roleId : null,
-          }),
+          body: JSON.stringify(
+            isSignUp
+              ? {
+                  email: email.trim(),
+                  password,
+                  displayName: name.trim(),
+                  role: auth.captureRoleInSignUp ? roleId : null,
+                }
+              : { email: email.trim(), password }
+          ),
         });
         const payload = (await res.json()) as { error?: string; ok?: boolean };
         if (!res.ok) {
-          throw new Error(payload.error ?? "Sign-up failed");
+          throw new Error(
+            payload.error ??
+              (isSignUp ? "Sign-up failed" : "Sign-in failed — check email and password.")
+          );
         }
       }
       onSuccess(pickRoleAfterAuth());
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Sign-up failed — try again.");
+      setError(
+        err instanceof Error
+          ? err.message
+          : isSignUp
+            ? "Sign-up failed — try again."
+            : "Sign-in failed — try again."
+      );
     } finally {
       setBusy(false);
     }
@@ -1618,15 +1640,41 @@ function AuthSignUpScreen({
       animate={{ opacity: 1, y: 0 }}
       className="flex h-full flex-col overflow-y-auto pb-2"
     >
-      <p className="text-[12px] font-extrabold" style={{ color: t.charcoal }}>
-        {auth.signUpTitle}
+      <div
+        className="flex rounded-xl border p-0.5"
+        style={{ borderColor: t.line, background: `${t.line}40` }}
+      >
+        {(["signUp", "signIn"] as const).map((tab) => {
+          const selected = mode === tab;
+          return (
+            <button
+              key={tab}
+              type="button"
+              onClick={() => {
+                setMode(tab);
+                setError(null);
+              }}
+              className="flex-1 rounded-lg py-1.5 text-[9px] font-bold transition"
+              style={{
+                background: selected ? "#fff" : "transparent",
+                color: selected ? t.charcoal : t.muted,
+                boxShadow: selected ? "0 1px 2px rgba(0,0,0,0.06)" : "none",
+              }}
+            >
+              {tab === "signUp" ? "Sign up" : "Sign in"}
+            </button>
+          );
+        })}
+      </div>
+      <p className="mt-2 text-[12px] font-extrabold" style={{ color: t.charcoal }}>
+        {isSignUp ? auth.signUpTitle : auth.signInTitle}
       </p>
-      {auth.signUpSubtitle && (
+      {(isSignUp ? auth.signUpSubtitle : auth.signInSubtitle) && (
         <p className="mt-0.5 text-[9px]" style={{ color: t.muted }}>
-          {auth.signUpSubtitle}
+          {isSignUp ? auth.signUpSubtitle : auth.signInSubtitle}
         </p>
       )}
-      {auth.captureRoleInSignUp && roles.length > 0 && (
+      {isSignUp && auth.captureRoleInSignUp && roles.length > 0 && (
         <div className="mt-2">
           <p className="text-[9px] font-semibold" style={{ color: t.charcoal }}>
             I am a… *
@@ -1702,7 +1750,7 @@ function AuthSignUpScreen({
           Password *
           <input
             type="password"
-            autoComplete="new-password"
+            autoComplete={isSignUp ? "new-password" : "current-password"}
             value={password}
             onChange={(e) => setPassword(e.target.value)}
             className={inputClass}
@@ -1710,7 +1758,7 @@ function AuthSignUpScreen({
             placeholder="6+ characters"
           />
         </label>
-        {auth.captureName && (
+        {isSignUp && auth.captureName && (
           <label className="block text-[9px] font-semibold" style={{ color: t.charcoal }}>
             Name *
             <input
@@ -1733,7 +1781,13 @@ function AuthSignUpScreen({
         className="mt-4 w-full rounded-2xl py-2.5 text-[10px] font-bold text-white disabled:opacity-45"
         style={{ background: t.accent }}
       >
-        {busy ? "Creating account…" : auth.submitLabel}
+        {busy
+          ? isSignUp
+            ? "Creating account…"
+            : "Signing in…"
+          : isSignUp
+            ? auth.submitLabel
+            : auth.signInSubmitLabel}
       </motion.button>
     </motion.div>
   );

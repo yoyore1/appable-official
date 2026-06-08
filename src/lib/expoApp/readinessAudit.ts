@@ -257,7 +257,7 @@ export function auditAppReadiness(
       plainWhy:
         "Buttons are in the preview — follow the Google guide under Connections (copy-paste). Email still works for testing.",
       inPreview: authInPreview,
-      priority: "soon",
+      priority: "launch_blocker",
     });
     push(items, {
       id: "apple-sign-in",
@@ -267,7 +267,7 @@ export function auditAppReadiness(
       plainWhy:
         "Before the App Store — step-by-step under Connections. Needs Apple Developer ($99/yr). Skip until launch.",
       inPreview: authInPreview,
-      priority: "soon",
+      priority: "launch_blocker",
     });
   }
 

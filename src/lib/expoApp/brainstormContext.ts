@@ -4,7 +4,9 @@ import type {
   ProjectBrainstormState,
   ProjectReadinessState,
 } from "@/lib/types";
+import { buildAgentBuiltStateBlock } from "./builtState";
 import type { ReadinessItem } from "./readinessAudit";
+import type { ExpoAppModel } from "./types";
 
 export function defaultBrainstormState(): ProjectBrainstormState {
   return { history: [], summary: "", pendingBuild: null };
@@ -82,9 +84,14 @@ export function summarizeReadinessForBuild(
 export function formatBrainstormContextForBuild(
   brainstorm: ProjectBrainstormState | null | undefined,
   readinessNote?: string,
-  connectorNote?: string
+  connectorNote?: string,
+  previewModel?: ExpoAppModel | null
 ): string {
   const parts: string[] = [];
+
+  if (previewModel) {
+    parts.push(buildAgentBuiltStateBlock(previewModel));
+  }
 
   if (connectorNote?.trim()) {
     parts.push(`Connections:\n${connectorNote.trim()}`);
@@ -94,7 +101,7 @@ export function formatBrainstormContextForBuild(
     parts.push(`Brainstorm summary (what the user planned):\n${brainstorm.summary.trim()}`);
   }
 
-  const recent = brainstorm?.history.slice(-6) ?? [];
+  const recent = brainstorm?.history.slice(-10) ?? [];
   if (recent.length > 0) {
     parts.push(
       "Recent brainstorm:\n" +
