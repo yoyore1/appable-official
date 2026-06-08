@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { PhonePreview } from "@/components/PhonePreview";
+import { projectAppHref } from "@/lib/projectRoutes";
 import { cn, timeAgo } from "@/lib/utils";
 import type { Project } from "@/lib/types";
 
@@ -12,10 +13,7 @@ const statusMeta: Record<Project["status"], { label: string; cls: string }> = {
 
 export function ProjectCard({ project }: { project: Project }) {
   const meta = statusMeta[project.status];
-  const href =
-    project.status === "interviewing"
-      ? `/project/${project.id}/build`
-      : `/project/${project.id}`;
+  const href = projectAppHref(project);
 
   return (
     <Link href={href} className="card group block p-3 transition hover:shadow-float hover:-translate-y-0.5">

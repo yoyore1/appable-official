@@ -41,6 +41,20 @@ class AppableBuilderService extends Disposable implements IAppableBuilderService
 		return this.channel.call<MasterBuildPrompt>('generatePlan', answers);
 	}
 
+	syncInterviewProject(
+		answers: InterviewAnswers,
+		masterPrompt: MasterBuildPrompt,
+		email?: string,
+		password?: string
+	): Promise<{ projectId: string }> {
+		return this.channel.call<{ projectId: string }>('syncInterviewProject', {
+			answers,
+			masterPrompt,
+			email,
+			password,
+		});
+	}
+
 	fetchPlan(projectId: string): Promise<MasterBuildPrompt> {
 		return this.channel.call<MasterBuildPrompt>('fetchPlan', projectId);
 	}

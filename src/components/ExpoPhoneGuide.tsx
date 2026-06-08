@@ -1,59 +1,90 @@
 "use client";
 
-import { useMemo } from "react";
-import { ExternalLink, QrCode, Smartphone } from "lucide-react";
+import { useEffect, useState } from "react";
+import { ExternalLink, Loader2, QrCode, Smartphone } from "lucide-react";
+import { buildExpoGoDeepLink } from "@/lib/expoGoLink";
 
-const EXPO_IOS =
-  "https://apps.apple.com/app/expo-go/id982107779";
+const EXPO_IOS = "https://apps.apple.com/app/expo-go/id982107779";
 const EXPO_ANDROID =
   "https://play.google.com/store/apps/details?id=host.exp.exponent";
 
+type ExpoStatus = "idle" | "starting" | "ready" | "error";
+
 export function ExpoPhoneGuide({
   projectId,
+  previewToken,
   appName,
   ready,
 }: {
   projectId: string;
+  previewToken: string | null;
   appName: string;
   ready: boolean;
 }) {
-  const previewUrl = useMemo(() => {
-    if (typeof window === "undefined") return "";
-    return `${window.location.origin}/project/${projectId}/expo/preview`;
-  }, [projectId]);
+  const [status, setStatus] = useState<ExpoStatus>("idle");
+  const [expoGoUrl, setExpoGoUrl] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!ready || !previewToken) return;
+
+    let cancelled = false;
+
+    async function poll() {
+      try {
+        const res = await fetch("/api/expo/status", { cache: "no-store" });
+        const data = (await res.json()) as {
+          status: ExpoStatus;
+          url?: string | null;
+          error?: string;
+        };
+        if (cancelled) return;
+        setStatus(data.status);
+        if (data.error) setError(data.error);
+        if (data.url && previewToken) {
+          setExpoGoUrl(buildExpoGoDeepLink(data.url, projectId, previewToken));
+        }
+        if (data.status !== "ready" && data.status !== "error") {
+          await fetch("/api/expo/start", { method: "POST" });
+        }
+      } catch {
+        if (!cancelled) setError("Could not reach phone preview service");
+      }
+    }
+
+    void fetch("/api/expo/start", { method: "POST" }).then(() => poll());
+    const iv = setInterval(poll, 2500);
+    return () => {
+      cancelled = true;
+      clearInterval(iv);
+    };
+  }, [ready, previewToken, projectId]);
 
   const qrSrc =
-    previewUrl && ready
-      ? `https://api.qrserver.com/v1/create-qr-code/?size=180x180&margin=8&data=${encodeURIComponent(previewUrl)}`
+    ready && expoGoUrl
+      ? `https://api.qrserver.com/v1/create-qr-code/?size=220x220&margin=10&data=${encodeURIComponent(expoGoUrl)}`
       : null;
 
   return (
-    <aside className="card-float flex h-full min-h-0 flex-col overflow-hidden p-4">
-      <div className="mb-3 flex items-center gap-2">
-        <span className="grid h-8 w-8 place-items-center rounded-xl bg-charcoal/5 text-charcoal">
-          <Smartphone className="h-4 w-4" />
-        </span>
-        <div>
-          <p className="text-sm font-semibold">Try on your phone</p>
-          <p className="text-[11px] text-warmgrey">Same preview, real device</p>
-        </div>
+    <aside className="flex h-full min-h-0 flex-col p-5">
+      <div className="mb-5">
+        <p className="text-base font-semibold text-charcoal">Preview on your phone</p>
+        <p className="mt-1 text-sm leading-relaxed text-charcoal-soft">
+          Test on a real device — touch, scroll, and see {appName} like a real app.
+        </p>
       </div>
 
-      <ol className="min-h-0 flex-1 space-y-4 overflow-y-auto text-sm">
-        <li className="space-y-2">
+      <div className="min-h-0 flex-1 space-y-6 overflow-y-auto">
+        <section className="space-y-3">
           <p className="text-xs font-semibold uppercase tracking-wide text-warmgrey">
-            1 · Install Expo Go
+            Step 1 · Download Expo Go
           </p>
-          <p className="text-xs leading-relaxed text-charcoal-soft">
-            Free app from the store — you&apos;ll use it to open {appName} on your
-            phone.
-          </p>
-          <div className="flex flex-col gap-1.5">
+          <div className="grid grid-cols-2 gap-2">
             <a
               href={EXPO_IOS}
               target="_blank"
               rel="noopener noreferrer"
-              className="inline-flex items-center justify-center gap-1.5 rounded-lg border border-line/70 bg-white px-3 py-2 text-xs font-semibold text-charcoal transition hover:border-coral/40"
+              className="inline-flex items-center justify-center gap-1.5 rounded-xl border border-line/70 bg-cream/50 px-3 py-2.5 text-xs font-semibold text-charcoal transition hover:border-coral/40"
             >
               App Store
               <ExternalLink className="h-3 w-3 opacity-50" />
@@ -62,70 +93,76 @@ export function ExpoPhoneGuide({
               href={EXPO_ANDROID}
               target="_blank"
               rel="noopener noreferrer"
-              className="inline-flex items-center justify-center gap-1.5 rounded-lg border border-line/70 bg-white px-3 py-2 text-xs font-semibold text-charcoal transition hover:border-coral/40"
+              className="inline-flex items-center justify-center gap-1.5 rounded-xl border border-line/70 bg-cream/50 px-3 py-2.5 text-xs font-semibold text-charcoal transition hover:border-coral/40"
             >
               Google Play
               <ExternalLink className="h-3 w-3 opacity-50" />
             </a>
           </div>
-        </li>
+        </section>
 
-        <li className="space-y-2">
+        <section className="space-y-3">
           <p className="text-xs font-semibold uppercase tracking-wide text-warmgrey">
-            2 · Scan on your phone
+            Step 2 · Scan the QR code
           </p>
-          {ready && qrSrc ? (
+
+          {!ready ? (
+            <div className="flex flex-col items-center rounded-2xl border border-dashed border-line/70 bg-cream/30 px-4 py-10 text-center">
+              <QrCode className="h-10 w-10 text-warmgrey/40" />
+              <p className="mt-3 text-sm text-warmgrey">
+                Build your app first — we&apos;ll put the code here.
+              </p>
+            </div>
+          ) : status !== "ready" || !qrSrc ? (
+            <div className="flex flex-col items-center rounded-2xl border border-line/60 bg-cream/40 px-4 py-10 text-center">
+              {status === "error" ? (
+                <>
+                  <Smartphone className="h-10 w-10 text-coral/60" />
+                  <p className="mt-3 text-sm font-medium text-charcoal">
+                    Phone preview didn&apos;t start
+                  </p>
+                  <p className="mt-1 text-xs text-warmgrey">{error ?? "Try refreshing the page."}</p>
+                </>
+              ) : (
+                <>
+                  <Loader2 className="h-10 w-10 animate-spin text-coral" />
+                  <p className="mt-3 text-sm font-medium text-charcoal">
+                    Getting your phone preview ready…
+                  </p>
+                  <p className="mt-1 text-xs text-warmgrey">
+                    First time can take a minute — we handle the setup for you.
+                  </p>
+                </>
+              )}
+            </div>
+          ) : (
             <>
-              <div className="mx-auto w-fit rounded-xl border border-line/60 bg-white p-2 shadow-soft">
+              <div className="mx-auto w-fit rounded-2xl border border-line/60 bg-white p-3 shadow-float">
                 {/* eslint-disable-next-line @next/next/no-img-element */}
                 <img
                   src={qrSrc}
-                  alt={`QR code to open ${appName} preview`}
-                  width={180}
-                  height={180}
-                  className="block rounded-lg"
+                  alt={`QR code to open ${appName} in Expo Go`}
+                  width={220}
+                  height={220}
+                  className="block rounded-xl"
                 />
               </div>
-              <p className="text-center text-[11px] text-warmgrey">
-                Point your camera or Expo Go at the code
+              <p className="text-center text-sm leading-relaxed text-charcoal-soft">
+                Open <span className="font-semibold text-charcoal">Expo Go</span> → tap{" "}
+                <span className="font-semibold text-charcoal">Scan QR code</span> → point at
+                this screen.
               </p>
             </>
-          ) : (
-            <div className="flex flex-col items-center rounded-xl border border-dashed border-line/70 bg-cream/40 px-3 py-6 text-center">
-              <QrCode className="h-8 w-8 text-warmgrey/50" />
-              <p className="mt-2 text-xs text-warmgrey">
-                QR appears when your preview is ready
-              </p>
-            </div>
           )}
-        </li>
+        </section>
 
-        <li className="space-y-2">
-          <p className="text-xs font-semibold uppercase tracking-wide text-warmgrey">
-            3 · Open in Expo Go
-          </p>
-          <p className="text-xs leading-relaxed text-charcoal-soft">
-            {ready ? (
-              <>
-                Opens your live preview in the browser on your phone. You can also
-                paste this link in Expo Go when we hook up the native bundle:
-              </>
-            ) : (
-              <>Confirm and build first — then scan to open on your device.</>
-            )}
-          </p>
-          {ready && previewUrl ? (
-            <a
-              href={previewUrl}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="block break-all rounded-lg bg-cream/80 px-2.5 py-2 text-[11px] font-medium text-coral-deep hover:underline"
-            >
-              {previewUrl.replace(/^https?:\/\//, "")}
-            </a>
-          ) : null}
-        </li>
-      </ol>
+        {ready && status === "ready" && (
+          <section className="rounded-xl bg-moss/8 px-3.5 py-3 text-xs leading-relaxed text-charcoal-soft">
+            <span className="font-semibold text-moss">Tip:</span> Shake your phone in Expo Go
+            and tap Reload if you just changed something.
+          </section>
+        )}
+      </div>
     </aside>
   );
 }

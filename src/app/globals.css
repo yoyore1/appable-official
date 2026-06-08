@@ -39,6 +39,7 @@
   html {
     -webkit-font-smoothing: antialiased;
     text-rendering: optimizeLegibility;
+    scroll-padding-top: 5.5rem;
   }
 
   body {
@@ -73,6 +74,24 @@
   .mesh--calm {
     opacity: 0.4;
     filter: blur(70px) saturate(105%);
+  }
+
+  /* Local mesh for build workspace panes (not full-viewport fixed). */
+  .build-pane-mesh {
+    background:
+      radial-gradient(55% 65% at 48% 22%, rgb(var(--coral) / 0.14), transparent 68%),
+      radial-gradient(45% 55% at 78% 72%, rgb(var(--peach) / 0.18), transparent 62%),
+      radial-gradient(40% 45% at 18% 80%, rgb(var(--coral-soft) / 0.1), transparent 58%),
+      rgb(var(--cream) / 0.35);
+  }
+
+  .chat-panel-surface {
+    background: linear-gradient(
+      180deg,
+      rgb(255 255 255 / 0.72) 0%,
+      rgb(250 246 240 / 0.55) 100%
+    );
+    backdrop-filter: blur(12px);
   }
 
   /* ---- Faint grain overlay for tactility --------------------------------- */

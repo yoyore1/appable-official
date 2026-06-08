@@ -101,7 +101,10 @@ export async function fulfill(userId: string, kind: PurchaseKind): Promise<void>
     }
     case "pack": {
       const p = prices.packs.find((x) => x.id === kind.packId);
-      if (p) await db.addBuildPower(userId, p.power);
+      if (p) {
+        await db.addBuildPower(userId, p.power);
+        await db.updateUser(userId, { usagePackPurchased: true });
+      }
       return;
     }
     case "review_topup": {

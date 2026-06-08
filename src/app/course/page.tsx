@@ -32,7 +32,7 @@ export default async function CoursePage({
   return (
     <>
       <Background calm />
-      {user ? <AppNav user={user} /> : <MarketingNav />}
+      {user ? <AppNav user={user} /> : <MarketingNav user={user} />}
       {searchParams.celebrate && <Confetti />}
 
       <main className="mx-auto max-w-5xl px-5 py-10">

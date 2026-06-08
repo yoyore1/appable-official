@@ -8,7 +8,7 @@ import { IServerChannel } from '../../../../base/parts/ipc/common/ipc.js';
 import { Emitter, Event } from '../../../../base/common/event.js';
 import { URI } from '../../../../base/common/uri.js';
 import { BuildOptions, ChatRequest, HandoffPayload, InterviewAnswers, ProgressEvent } from '../common/appableBuilderTypes.js';
-import { buildApp, chatWithAgent, fetchPlanForProject, generatePlanFromInterview, primeAppableEnv } from './appable/engine.js';
+import { buildApp, chatWithAgent, fetchPlanForProject, generatePlanFromInterview, primeAppableEnv, syncInterviewProject } from './appable/engine.js';
 import { exchangeHandoffToken, parseHandoffUri } from './appable/handoff.js';
 
 export class AppableBuilderChannel implements IServerChannel {
@@ -44,6 +44,15 @@ export class AppableBuilderChannel implements IServerChannel {
 			}
 			case 'generatePlan': {
 				return generatePlanFromInterview(params as InterviewAnswers);
+			}
+			case 'syncInterviewProject': {
+				const { answers, masterPrompt, email, password } = params as {
+					answers: InterviewAnswers;
+					masterPrompt: import('../common/appableBuilderTypes.js').MasterBuildPrompt;
+					email?: string;
+					password?: string;
+				};
+				return syncInterviewProject(answers, masterPrompt, email, password);
 			}
 			case 'fetchPlan': {
 				return fetchPlanForProject(params as string);

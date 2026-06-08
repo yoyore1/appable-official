@@ -17,7 +17,6 @@ export default async function DashboardPage({
 }) {
   const user = await getCurrentUser();
   if (!user) redirect("/login");
-  if (!user.depositPaid) redirect("/deposit");
 
   const projects = await db.listProjects(user.id);
 

@@ -10,6 +10,8 @@ export interface UserAccount {
   dataSharingOptIn: boolean;
   isAdmin: boolean;
   courseTierId: string | null;
+  /** Set when the user buys any build-power usage pack (removes preview watermark). */
+  usagePackPurchased?: boolean;
   /** Free-tier live AI spend (USD) — capped at ~$0.55 per models-polish spec. */
   aiUsageUsd: number;
   /** TTS characters consumed on free tier (hard-capped). */
@@ -76,6 +78,21 @@ export interface InterviewStepPrefetch {
   appablePick: string;
 }
 
+/** User progress on launch-readiness checklist (Phase 2 brainstorm). */
+export type ReadinessDecision = "yes" | "later" | "skip";
+
+export interface ReadinessItemState {
+  discussed: boolean;
+  discussedAt?: string;
+  decision?: ReadinessDecision | null;
+}
+
+export interface ProjectReadinessState {
+  items: Record<string, ReadinessItemState>;
+  pinnedItemId?: string | null;
+  lastAuditAt?: string;
+}
+
 export interface Project {
   id: string;
   userId: string;
@@ -98,6 +115,10 @@ export interface Project {
   githubRepoUrl: string | null;
   /** Generated RN/Expo screen model — web preview + future codegen source of truth. */
   expoAppModel: import("@/lib/expoApp/types").ExpoAppModel | null;
+  /** Secret token for Expo Go shell to fetch expoAppModel (no session cookie). */
+  expoPreviewToken?: string | null;
+  /** Launch checklist progress — discussed items & decisions. */
+  readinessState?: ProjectReadinessState | null;
   /** Guest-session AI spend (merged to user on claim). */
   aiUsageUsd?: number;
   createdAt: string;

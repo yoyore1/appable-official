@@ -5,6 +5,7 @@ import { Background } from "@/components/Background";
 import { AppNav } from "@/components/AppNav";
 import { getCurrentUser } from "@/lib/session";
 import { db } from "@/lib/db";
+import { projectAppHref } from "@/lib/projectRoutes";
 
 export default async function LaunchPage() {
   const user = await getCurrentUser();
@@ -34,7 +35,7 @@ export default async function LaunchPage() {
             projects.map((p) => (
               <Link
                 key={p.id}
-                href={`/project/${p.id}`}
+                href={projectAppHref(p)}
                 className="card flex items-center justify-between p-4 transition hover:-translate-y-0.5"
               >
                 <div>

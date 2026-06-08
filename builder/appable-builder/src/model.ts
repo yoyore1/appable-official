@@ -7,6 +7,7 @@
  */
 import { buildModel, integrations } from "./config.js";
 import { generateSwiftUIProject } from "./swiftgen.js";
+import { SWIFT_DESIGN_RULES } from "./swiftDesignPrompt.js";
 import type {
   BuildMode,
   CompileIssue,
@@ -72,6 +73,8 @@ export async function generateProject(
     (mode === "full"
       ? "This is a FULL build: also wire Supabase auth/db/storage, a RevenueCat paywall, and push notifications."
       : "This is a BASE build: UI only with mock data.") +
+    "\n\n" +
+    SWIFT_DESIGN_RULES +
     referenceContext(refs);
 
   const user = `Master build prompt:\n${JSON.stringify(prompt, null, 2)}`;

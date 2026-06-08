@@ -115,6 +115,16 @@ export const cheapTextModel = {
 /** @deprecated alias */
 export const chatModel = cheapTextModel;
 
+/** Landing “Suggest ideas” — can use a smaller/faster model than interview chat. */
+export const suggestIdeasModel = {
+  baseUrl: env("SUGGEST_IDEAS_MODEL_BASE_URL") ?? cheapTextModel.baseUrl,
+  key: env("SUGGEST_IDEAS_MODEL_KEY") ?? cheapTextModel.key,
+  name:
+    env("SUGGEST_IDEAS_MODEL_NAME") ??
+    env("CHAT_MODEL_NAME") ??
+    "Qwen/Qwen3-30B-A3B",
+};
+
 export const appCodeModel = {
   baseUrl: env("BUILD_MODEL_BASE_URL") ?? env("CHAT_MODEL_BASE_URL"),
   key: env("BUILD_MODEL_KEY") ?? env("CHAT_MODEL_KEY"),
@@ -122,10 +132,6 @@ export const appCodeModel = {
 };
 
 export const planModel = appCodeModel;
-
-/** Interview acks + pills: chat model (Qwen 3.6 default) or kimi (K2.6). Set INTERVIEW_MODEL=kimi to switch. */
-export const interviewLlmProvider: "flash" | "kimi" =
-  env("INTERVIEW_MODEL") === "kimi" ? "kimi" : "flash";
 
 export const visionModel = {
   baseUrl: deepinfra.openaiBase,

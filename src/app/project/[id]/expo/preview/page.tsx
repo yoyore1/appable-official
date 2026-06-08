@@ -1,6 +1,7 @@
 import { redirect } from "next/navigation";
 import { ExpoLivePreview } from "@/components/ExpoLivePreview";
 import { db } from "@/lib/db";
+import { shouldShowAppableWatermark } from "@/lib/publishingTier";
 import { getCurrentUser } from "@/lib/session";
 
 /** Full-screen phone preview — opened from QR on your real device. */
@@ -28,6 +29,7 @@ export default async function ExpoMobilePreviewPage({
         buildPercent={100}
         startPastOnboarding
         alive
+        showWatermark={shouldShowAppableWatermark(user)}
       />
       <p className="mt-4 max-w-xs text-center text-[11px] text-warmgrey">
         Pinch to zoom if needed · same preview as on desktop

@@ -16,8 +16,10 @@ import {
 	BuildMode, BuildOptions, BuildResult, ChatRequest, ChatResponse, InterviewAnswers,
 	MasterBuildPrompt, ProgressEvent, ShipPath, Vibe,
 } from '../../common/appableBuilderTypes.js';
-import { inferVibe, resolveAppName, resolveColors } from '../../common/appableInterview.js';
+import { INTERVIEW_QUESTIONS } from '../../common/appableInterview.js';
+import { buildMasterPromptFromInterview } from './masterPlan.js';
 import { GeneratedFile, bundleIdFor, generateSwiftUIProject } from './swiftgen.js';
+import { SWIFT_DESIGN_RULES } from './swiftDesignPrompt.js';
 import { loadAppableEnv } from './loadEnv.js';
 
 const run = promisify(execFile);
@@ -82,10 +84,13 @@ const sampleMasterPrompt: MasterBuildPrompt = {
 	appName: 'PlantPal',
 	description: 'A calm companion that reminds you to water your plants and tracks their health.',
 	audience: 'Busy plant lovers who forget to water.',
+	twist: null,
 	features: ['Watering reminders', 'Plant journal', 'Care tips'],
+	layoutArchetype: 'tracker-dashboard',
 	vibe: 'Soft',
 	colors: 'Sage green & cream',
 	screens: ['Onboarding', 'Home', 'Watering reminders screen', 'Plant journal screen', 'Profile'],
+	referenceApp: null,
 };
 
 // ---- platform client --------------------------------------------------------
@@ -158,11 +163,12 @@ async function postCache(userId: string, category: string, mp: MasterBuildPrompt
 // ---- model (Kimi or deterministic) -----------------------------------------
 function estimateTokens(s: string): number { return Math.ceil(s.length / 4); }
 
-async function generateProject(mp: MasterBuildPrompt, mode: BuildMode, refs: SimilarBuild[]): Promise<GeneratedFile[]> {
-	if (!has().buildModel) { return generateSwiftUIProject(mp, mode); }
+async function generateProject(mp: MasterBuildPrompt, mode: BuildMode, refs: SimilarBuild[], projectId?: string): Promise<GeneratedFile[]> {
+	if (!has().buildModel) { return generateSwiftUIProject(mp, mode, projectId); }
 	const refCtx = refs.length ? '\nReference structures (adapt, don\'t copy):\n' + refs.map((r) => `- ${r.category}/${r.vibe}: ${r.features.join(', ')}`).join('\n') : '';
 	const system = 'You are an expert iOS engineer. Generate a complete native SwiftUI app as an XcodeGen project. Respond with STRICT JSON { "files": [ { "path", "contents" } ] }. Include project.yml, Resources/Info.plist, an @main App, themed SwiftUI views per screen, mock data. ' +
-		(mode === 'full' ? 'FULL build: also wire Supabase auth/db, RevenueCat paywall, push.' : 'BASE build: UI only with mock data.') + refCtx;
+		(mode === 'full' ? 'FULL build: also wire Supabase auth/db, RevenueCat paywall, push.' : 'BASE build: UI only with mock data.') +
+		'\n\n' + SWIFT_DESIGN_RULES + refCtx;
 	try {
 		const res = await fetch(`${cfg().buildModel.baseUrl}/chat/completions`, {
 			method: 'POST',
@@ -173,7 +179,7 @@ async function generateProject(mp: MasterBuildPrompt, mode: BuildMode, refs: Sim
 		const parsed = JSON.parse(data?.choices?.[0]?.message?.content ?? '{}');
 		if (Array.isArray(parsed?.files) && parsed.files.length) { return parsed.files as GeneratedFile[]; }
 	} catch { /* fall through */ }
-	return generateSwiftUIProject(mp, mode);
+	return generateSwiftUIProject(mp, mode, projectId);
 }
 
 // ---- assistant chat + interview → plan (Kimi) ------------------------------
@@ -218,50 +224,65 @@ export async function chatWithAgent(req: ChatRequest): Promise<ChatResponse> {
 
 export async function generatePlanFromInterview(answers: InterviewAnswers): Promise<MasterBuildPrompt> {
 	loadAppableEnv();
-	const appName = resolveAppName(answers);
-	const vibe = inferVibe(answers);
-	const colors = resolveColors(answers.colors, answers);
+	const base = buildMasterPromptFromInterview(answers);
 
 	const system =
 		'You convert a short app interview into a structured iOS build plan. ' +
-		'Respond with STRICT JSON: { "appName", "description", "audience", "features": string[3-5], "vibe", "colors", "screens": string[4-6] }. ' +
-		'Use the provided appName exactly. vibe must be one of Cinematic, Minimal, Bold, Soft, Luxury. screens always include Onboarding and Home.';
-	const user = JSON.stringify({
-		idea: answers.idea,
-		audience: answers.audience,
-		featuresRaw: answers.features,
-		appName,
-		vibe,
-		colors,
-	});
-	const raw = await callKimi([{ role: 'system', content: system }, { role: 'user', content: user }], { json: true, maxTokens: 900 });
+		'Respond with STRICT JSON: { "appName", "description", "audience", "twist" (null), "features": string[3], ' +
+		'"layoutArchetype" (tracker-dashboard|swipe-cards|social-feed|chat-messaging|marketplace-shop|booking-scheduling|content-library|habit-streak|journal-notes|onboarding-heavy-utility), ' +
+		'"vibe", "colors", "screens": string[4-6], "referenceApp" (null) }. ' +
+		'Use the provided appName exactly. features MUST reflect what the user said. screens always include Onboarding and Home.';
+	const user = JSON.stringify({ answers, deterministicDraft: base });
+	const raw = await callKimi([{ role: 'system', content: system }, { role: 'user', content: user }], { json: true, maxTokens: 1200 });
 	if (raw) {
 		try {
 			const p = JSON.parse(raw) as Partial<MasterBuildPrompt>;
-			if (p.appName && Array.isArray(p.features)) {
+			if (p.appName && Array.isArray(p.features) && p.features.length >= 2) {
 				return {
-					appName: p.appName,
-					description: p.description ?? answers.idea,
-					audience: p.audience ?? answers.audience,
-					features: p.features.length ? p.features : answers.features.split(/,|;/).map(s => s.trim()).filter(Boolean),
-					vibe: (p.vibe as Vibe) ?? vibe,
-					colors: p.colors ?? colors,
-					screens: p.screens?.length ? p.screens : ['Onboarding', 'Home', 'Detail', 'Profile'],
+					...base,
+					...p,
+					twist: p.twist ?? null,
+					referenceApp: p.referenceApp ?? null,
+					layoutArchetype: p.layoutArchetype ?? base.layoutArchetype,
+					features: p.features.slice(0, 5),
+					vibe: (p.vibe as Vibe) ?? base.vibe,
 				};
 			}
-		} catch { /* fall through to deterministic */ }
+		} catch { /* fall through */ }
 	}
-	// Deterministic fallback when the model is offline.
-	const feats = answers.features.split(/,|;|\band\b/).map(s => s.trim()).filter(Boolean).slice(0, 5);
-	return {
-		appName,
-		description: answers.idea,
-		audience: answers.audience,
-		features: feats.length ? feats : ['Core feature', 'Browse', 'Save'],
-		vibe,
-		colors,
-		screens: ['Onboarding', 'Home', ...feats.slice(0, 3).map(f => `${f} screen`), 'Profile'],
-	};
+	return base;
+}
+
+function interviewTurnsFromAnswers(answers: InterviewAnswers) {
+	return INTERVIEW_QUESTIONS.map((q) => ({
+		questionId: q.id,
+		question: q.prompt,
+		answer: String(answers[q.id] ?? '').trim(),
+	})).filter((t) => t.answer.length > 0);
+}
+
+/** Persist Void interview + plan on the platform (legal URLs, ready status). */
+export async function syncInterviewProject(
+	answers: InterviewAnswers,
+	masterPrompt: MasterBuildPrompt,
+	email?: string,
+	password?: string
+): Promise<{ projectId: string }> {
+	loadAppableEnv();
+	if (!has().platform || isDevBypass()) {
+		return { projectId: 'sample' };
+	}
+	const user = await validateUser(email ?? 'you@gmail.com', password ?? 'mock');
+	const res = await papi<{ projectId: string }>('/api/projects/from-builder-interview', {
+		method: 'POST',
+		body: JSON.stringify({
+			userId: user.userId,
+			interview: interviewTurnsFromAnswers(answers),
+			masterPrompt,
+			target: 'swift',
+		}),
+	});
+	return res;
 }
 
 // ---- compile / error checks -------------------------------------------------
@@ -407,10 +428,11 @@ export async function buildApp(opts: BuildOptions, emit: Emit): Promise<BuildRes
 	}, 1100);
 	let files: GeneratedFile[];
 	try {
-		files = await generateProject(mp, opts.mode, refs);
+		files = await generateProject(mp, opts.mode, refs, opts.projectId !== 'sample' ? opts.projectId : undefined);
 	} finally {
 		clearInterval(genTick);
 	}
+	prog(emit, 'step', 'Tailoring privacy & support for this app…', 50);
 	prog(emit, 'step', 'Setting up your screens', 52);
 	prog(emit, 'step', 'Making it beautiful…', 58);
 

@@ -1,12 +1,11 @@
 /**
- * Interview acks + suggestions — Qwen 3.6 (default) or Kimi via INTERVIEW_MODEL.
+ * Interview acks, engineer pool picks, clarify prompts, and suggestion pills — Qwen via CHAT_MODEL.
  * No category templates; idea-tailored fallback if LLM fails.
  */
 import { answerFor } from "@/lib/interviewHelpers";
 import { flashChatComplete } from "@/lib/flashChat";
-import { interviewLlmProvider } from "@/lib/config";
 import type { AiChatResult } from "@/lib/deepinfraCost";
-import { planChatComplete, type PlanChatMessage } from "@/lib/planChat";
+import type { PlanChatMessage } from "@/lib/planChat";
 import type { InterviewTurn } from "@/lib/types";
 import {
   APPABLE_PICK,
@@ -34,9 +33,6 @@ async function interviewChatComplete(
     timeoutMs?: number;
   } = {}
 ): Promise<AiChatResult> {
-  if (interviewLlmProvider === "kimi") {
-    return planChatComplete(messages, opts);
-  }
   return flashChatComplete(messages, opts);
 }
 
@@ -371,11 +367,7 @@ export async function interviewAiAck(
           .join("\n"),
       },
     ],
-    {
-      temperature: strict ? 0.65 : 0.8,
-      maxTokens: interviewLlmProvider === "kimi" ? 256 : 256,
-      timeoutMs: interviewLlmProvider === "kimi" ? 60_000 : 45_000,
-    }
+    { temperature: strict ? 0.65 : 0.8, maxTokens: 256, timeoutMs: 45_000 }
   );
 
   return text.replace(/^["']|["']$/g, "").trim();
@@ -404,11 +396,7 @@ async function suggestOnce(
           .join("\n\n"),
       },
     ],
-    {
-      temperature: strict ? 0.35 : 0.45,
-      maxTokens: interviewLlmProvider === "kimi" ? 512 : 512,
-      timeoutMs: interviewLlmProvider === "kimi" ? 60_000 : 45_000,
-    }
+    { temperature: strict ? 0.35 : 0.45, maxTokens: 512, timeoutMs: 45_000 }
   );
 
   const parsed = parseJsonFromText<{ suggestions?: string[] }>(raw);
@@ -476,7 +464,7 @@ export async function interviewAiSuggestions(
   return [...items.slice(0, 3), APPABLE_PICK];
 }
 
-/** Kimi picks 0–2 questions from the curated pool (no monetization). */
+/** App engineer pass: Qwen picks 0–2 questions from the curated pool (no monetization). */
 export async function interviewAiPickPoolPlan(
   interview: InterviewTurn[]
 ): Promise<PoolQuestionId[]> {
@@ -525,7 +513,7 @@ export async function interviewAiPickPoolPlan(
   return pick.length > 0 ? pick : sync;
 }
 
-/** One targeted clarify question when we are not confident — uses Kimi when available. */
+/** One targeted clarify question when we are not confident. */
 export async function interviewAiClarifyPrompt(
   anchor: ClarifyAnchor,
   interview: InterviewTurn[]
@@ -554,11 +542,7 @@ export async function interviewAiClarifyPrompt(
         }),
       },
     ],
-    {
-      temperature: 0.4,
-      maxTokens: 180,
-      timeoutMs: interviewLlmProvider === "kimi" ? 45_000 : 25_000,
-    }
+    { temperature: 0.4, maxTokens: 180, timeoutMs: 25_000 }
   );
 
   const parsed = parseJsonFromText<{ question?: string }>(text);

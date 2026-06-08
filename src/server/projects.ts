@@ -44,6 +44,7 @@ import {
 import { ensureRepoForApp } from "@/lib/github";
 import { builderDeepLink, handoffFallbackUrl } from "@/lib/handoff";
 import { applyExpoTweak } from "@/lib/expoApp/applyTweak";
+import { runBrainstormChat, type BrainstormTurn } from "@/lib/expoApp/brainstormChat";
 import {
   applySelectionTweak,
   type SelectionTweakAction,
@@ -84,9 +85,9 @@ export async function startInterviewFromIdea(
   void (async () => {
     try {
       const { interviewAiPickPoolPlan } = await import("@/lib/interviewAi");
-      const kimiPlan = await interviewAiPickPoolPlan(interview);
-      if (kimiPlan.length) {
-        await db.updateProject(project.id, { interviewPlan: kimiPlan });
+      const engineerPlan = await interviewAiPickPoolPlan(interview);
+      if (engineerPlan.length) {
+        await db.updateProject(project.id, { interviewPlan: engineerPlan });
       }
     } catch {
       /* sync plan is enough */
@@ -417,14 +418,95 @@ export async function runExpoWebBuild(
     () => buildExpoAppModel(mp, projectId, undefined, project.interview)
   );
   const { model, passes } = built;
+  const { mintExpoPreviewToken } = await import("@/lib/expoPreviewToken");
   await db.updateProject(projectId, {
     expoAppModel: model,
+    expoPreviewToken: mintExpoPreviewToken(),
     target: "rn",
     status: "building",
   });
   revalidatePath(`/project/${projectId}`);
   setTimeout(() => clearBuildProgress(projectId), 60_000);
   return { model, passes };
+}
+
+/** Post-build brainstorm — cheap model, no preview changes, no AI cap. */
+export async function expoBrainstormChat(
+  projectId: string,
+  message: string,
+  history: BrainstormTurn[] = [],
+  pinnedItemId?: string | null
+): Promise<{ ok: true; reply: string } | { ok: false; message: string }> {
+  const user = await requireUser();
+  const project = await db.getProject(projectId);
+  if (!project || project.userId !== user.id) throw new Error("NOT_FOUND");
+  if (!project.masterPrompt) throw new Error("NO_PROMPT");
+
+  try {
+    const model = project.expoAppModel ?? null;
+    const interview = project.interview ?? [];
+    const { auditAppReadiness, enrichAuditWithState } = await import(
+      "@/lib/expoApp/readinessAudit"
+    );
+    const audit =
+      model != null
+        ? enrichAuditWithState(
+            auditAppReadiness(model, project.masterPrompt, interview),
+            project.readinessState,
+            pinnedItemId
+          )
+        : null;
+    const pinnedItem =
+      pinnedItemId && audit
+        ? audit.items.find((i) => i.id === pinnedItemId) ?? null
+        : null;
+
+    const reply = await runBrainstormChat(project.masterPrompt, history, message, {
+      model,
+      interview,
+      audit,
+      pinnedItem,
+    });
+    return { ok: true, reply };
+  } catch {
+    return { ok: false, message: "Brainstorm hit a snag — try again." };
+  }
+}
+
+/** Persist launch-checklist progress (discussed / yes / later / skip). */
+export async function patchProjectReadiness(
+  projectId: string,
+  update: {
+    pinnedItemId?: string | null;
+    itemId?: string;
+    discussed?: boolean;
+    decision?: import("@/lib/types").ReadinessDecision | null;
+  }
+): Promise<{ ok: true; state: import("@/lib/types").ProjectReadinessState }> {
+  const user = await requireUser();
+  const project = await db.getProject(projectId);
+  if (!project || project.userId !== user.id) throw new Error("NOT_FOUND");
+
+  const { defaultReadinessState, patchReadinessItem } = await import(
+    "@/lib/expoApp/readinessAudit"
+  );
+  let state = project.readinessState ?? defaultReadinessState();
+
+  if (update.pinnedItemId !== undefined) {
+    state = { ...state, pinnedItemId: update.pinnedItemId };
+  }
+
+  if (update.itemId) {
+    state = patchReadinessItem(state, update.itemId, {
+      ...(update.discussed !== undefined ? { discussed: update.discussed } : {}),
+      ...(update.decision !== undefined ? { decision: update.decision } : {}),
+    });
+  }
+
+  state = { ...state, lastAuditAt: new Date().toISOString() };
+  await db.updateProject(projectId, { readinessState: state });
+  revalidatePath(`/project/${projectId}/expo`);
+  return { ok: true, state };
 }
 
 /** Post-build tweak chat — cheap model, counts against $0.55 AI cap. */

@@ -69,7 +69,7 @@ export function BuilderHandoff({
           tag="React Native"
           recommended={false}
           highlight={isMobile}
-          desc="Stays right here on the web. Confirm your plan in chat, then see your app live in the phone preview — Expo Go for your real device."
+          desc="Stays right here on the web. Confirm your plan, then scan the QR in Expo Go to run it on your phone."
           cta={isMobile ? "Build on my phone" : "Build with Expo"}
           busy={busy === "rn"}
           done={opened === "rn"}

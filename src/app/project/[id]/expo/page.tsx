@@ -1,50 +1,65 @@
 import { redirect } from "next/navigation";
 import Link from "next/link";
-import { Background } from "@/components/Background";
+import { ChevronLeft } from "lucide-react";
 import { AppNav } from "@/components/AppNav";
+import { Background } from "@/components/Background";
+import { Confetti } from "@/components/Confetti";
 import { ExpoBuildRoom } from "@/components/ExpoBuildRoom";
+import { mintExpoPreviewToken } from "@/lib/expoPreviewToken";
+import { isExpoAppBuilt } from "@/lib/projectRoutes";
 import { getCurrentUser } from "@/lib/session";
 import { db } from "@/lib/db";
+import { shouldShowAppableWatermark } from "@/lib/publishingTier";
 
-export default async function ExpoBuildPage({ params }: { params: { id: string } }) {
+export default async function ExpoBuildPage({
+  params,
+  searchParams,
+}: {
+  params: { id: string };
+  searchParams: { celebrate?: string };
+}) {
   const user = await getCurrentUser();
   if (!user) redirect("/login");
 
-  const project = await db.getProject(params.id);
+  let project = await db.getProject(params.id);
   if (!project || project.userId !== user.id) redirect("/dashboard");
   if (!user.depositPaid) redirect(`/deposit?project=${project.id}`);
   if (!project.masterPrompt) redirect(`/project/${project.id}/build`);
 
+  if (project.expoAppModel && !project.expoPreviewToken) {
+    await db.updateProject(project.id, { expoPreviewToken: mintExpoPreviewToken() });
+    project = (await db.getProject(params.id))!;
+  }
+
   const mp = project.masterPrompt;
+  const built = isExpoAppBuilt(project);
 
   return (
-    <>
+    <div className="grain relative flex h-[100dvh] flex-col overflow-hidden">
       <Background calm />
-      <AppNav user={user} />
-      <main
-        className="mx-auto flex w-full max-w-[min(100%,1680px)] flex-col px-4 py-6 sm:px-6 lg:px-8"
-        style={{ height: "calc(100vh - 64px)" }}
-      >
+      <AppNav user={user} wide />
+      {searchParams.celebrate && <Confetti />}
+      <header className="relative z-10 flex shrink-0 items-center gap-2 border-b border-line/40 bg-cream/50 px-3 py-2 backdrop-blur-md sm:px-4">
         <Link
-          href={`/project/${project.id}`}
-          className="mb-3 text-sm text-warmgrey hover:text-charcoal"
+          href={built ? "/dashboard" : `/project/${project.id}`}
+          className="inline-flex items-center gap-0.5 rounded-lg px-1.5 py-1 text-sm text-warmgrey transition hover:bg-sand/60 hover:text-charcoal"
         >
-          ← Back
+          <ChevronLeft className="h-4 w-4" />
+          <span className="hidden sm:inline">{built ? "My apps" : "Back"}</span>
         </Link>
-        <div className="mb-3">
-          <h1 className="text-xl font-semibold">Build {mp.appName} with Expo</h1>
-          <p className="text-sm text-charcoal-soft">
-            Chat on the left, live preview in the center, Expo Go on your phone
-            on the right.
-          </p>
-        </div>
-        <ExpoBuildRoom
-          projectId={project.id}
-          initialPlan={mp}
-          initialModel={project.expoAppModel}
-          interview={project.interview}
-        />
-      </main>
-    </>
+        <span className="h-4 w-px bg-line/70" aria-hidden />
+        <h1 className="truncate text-sm font-semibold text-charcoal">{mp.appName}</h1>
+      </header>
+      <ExpoBuildRoom
+        projectId={project.id}
+        initialPlan={mp}
+        initialModel={project.expoAppModel}
+        interview={project.interview}
+        initialReadinessState={project.readinessState}
+        showWatermark={shouldShowAppableWatermark(user)}
+        previewToken={project.expoPreviewToken ?? null}
+        className="min-h-0 flex-1"
+      />
+    </div>
   );
 }

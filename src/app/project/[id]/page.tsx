@@ -19,6 +19,7 @@ import { getCurrentUser } from "@/lib/session";
 import { db } from "@/lib/db";
 import { launchPackCheckout } from "@/server/checkout";
 import { prices } from "@/lib/config";
+import { isExpoAppBuilt } from "@/lib/projectRoutes";
 import { formatMoney } from "@/lib/utils";
 
 export default async function ProjectPage({
@@ -44,6 +45,11 @@ export default async function ProjectPage({
     redirect(`/deposit?project=${project.id}`);
   }
   if (!project.masterPrompt) redirect(`/project/${project.id}/build`);
+
+  if (isExpoAppBuilt(project)) {
+    const q = searchParams.celebrate ? "?celebrate=1" : "";
+    redirect(`/project/${project.id}/expo${q}`);
+  }
 
   const mp = project.masterPrompt;
   const buyLaunch = launchPackCheckout.bind(null, project.id);

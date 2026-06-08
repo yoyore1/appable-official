@@ -186,10 +186,19 @@ export const AppableBuilder = ({
 			}
 
 			setPhase('ready')
-			const planPromise = appableService.generatePlan(answersRef.current as InterviewAnswers)
+			const answers = answersRef.current as InterviewAnswers
+			const planPromise = appableService.generatePlan(answers)
 			const p = await runBuildingSteps(planPromise)
 			setPlan(p)
-			addMsg('ai', `Meet your app. 🎉 This is really yours — “${p.appName}”. Tap “Build my app” when you're ready, or tell me what to change.`)
+			try {
+				const synced = await appableService.syncInterviewProject(answers, p)
+				if (synced.projectId && synced.projectId !== 'sample') {
+					setProjectId(synced.projectId)
+				}
+			} catch {
+				/* offline / mock — build still works locally */
+			}
+			addMsg('ai', `Meet your app. 🎉 This is really yours — “${p.appName}”. Privacy & support pages are ready too. Tap “Build my app” when you're ready, or tell me what to change.`)
 		} catch {
 			addMsg('ai', 'I had trouble finishing your plan — your answers are saved. Tap “Build my app” to try again.')
 			setPhase('ready')

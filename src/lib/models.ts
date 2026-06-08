@@ -16,7 +16,6 @@ import {
   interviewAiSuggestions,
   isGenericInterviewAck,
 } from "@/lib/interviewAi";
-import { interviewLlmProvider } from "@/lib/config";
 import {
   inferArchetypeFromInterview,
   inferFromReference,
@@ -583,9 +582,7 @@ export async function chatReply(
 }
 
 function interviewLlmReady(): boolean {
-  return interviewLlmProvider === "kimi"
-    ? integrations.planModel
-    : integrations.chatModel;
+  return integrations.chatModel;
 }
 
 /** @deprecated Spine steps skip acks — use ackForAppablePick when they tap Let Appable pick. */

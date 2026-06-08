@@ -62,7 +62,10 @@ export async function signInAction(
 
   setSession(user.id);
   if (projectId) await claimGuestProject(projectId, user.id);
-  redirect(afterAuthDest(user.depositPaid, projectId));
+  if (projectId && user.depositPaid) {
+    redirect(`/project/${projectId}?celebrate=1`);
+  }
+  redirect("/dashboard");
 }
 
 /**
@@ -77,7 +80,10 @@ export async function googleAuthAction(): Promise<void> {
 
   const guestProjectId = getGuestProjectId() ?? null;
   if (guestProjectId) await claimGuestProject(guestProjectId, user.id);
-  redirect(afterAuthDest(user.depositPaid, guestProjectId));
+  if (guestProjectId && user.depositPaid) {
+    redirect(`/project/${guestProjectId}?celebrate=1`);
+  }
+  redirect("/dashboard");
 }
 
 export async function signOutAction(): Promise<void> {

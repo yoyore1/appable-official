@@ -2,14 +2,19 @@ import { Background } from "@/components/Background";
 import { Logo } from "@/components/Logo";
 import { AuthForm } from "@/components/AuthForm";
 import { db } from "@/lib/db";
+import { getCurrentUser } from "@/lib/session";
+import { redirect } from "next/navigation";
 
 export default async function LoginPage({
   searchParams,
 }: {
   searchParams: { project?: string };
 }) {
+  const user = await getCurrentUser();
+  if (user) redirect("/dashboard");
+
   const projectId = searchParams.project?.trim();
-  let sub = "Pick up right where you left off.";
+  let sub = "Sign in to see your apps.";
 
   if (projectId) {
     const project = await db.getProject(projectId);

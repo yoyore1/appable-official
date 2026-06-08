@@ -239,6 +239,140 @@ function defaultInference(
   };
 }
 
+/** Alternate patterns so landing “Suggest ideas” can offer 3 distinct app shapes. */
+const ARCHETYPE_ALTERNATES: Record<LayoutArchetype, LayoutArchetype[]> = {
+  "tracker-dashboard": ["habit-streak", "content-library", "journal-notes"],
+  "habit-streak": ["tracker-dashboard", "content-library", "journal-notes"],
+  "content-library": ["habit-streak", "tracker-dashboard", "journal-notes"],
+  "booking-scheduling": ["tracker-dashboard", "chat-messaging", "marketplace-shop"],
+  "marketplace-shop": ["swipe-cards", "content-library", "booking-scheduling"],
+  "social-feed": ["chat-messaging", "swipe-cards", "content-library"],
+  "chat-messaging": ["social-feed", "booking-scheduling", "tracker-dashboard"],
+  "swipe-cards": ["social-feed", "marketplace-shop", "booking-scheduling"],
+  "journal-notes": ["tracker-dashboard", "habit-streak", "content-library"],
+  "onboarding-heavy-utility": ["tracker-dashboard", "content-library", "habit-streak"],
+};
+
+function displayAppName(slug: string): string {
+  const known: Record<string, string> = {
+    strava: "Strava",
+    myfitnesspal: "MyFitnessPal",
+    fitbit: "Fitbit",
+    duolingo: "Duolingo",
+    instagram: "Instagram",
+    tiktok: "TikTok",
+    tinder: "Tinder",
+    airbnb: "Airbnb",
+    calendly: "Calendly",
+    spotify: "Spotify",
+    netflix: "Netflix",
+    notion: "Notion",
+    uber: "Uber",
+    doordash: "DoorDash",
+    whatsapp: "WhatsApp",
+    amazon: "Amazon",
+    etsy: "Etsy",
+    headspace: "Headspace",
+    yelp: "Yelp",
+  };
+  const key = slug.toLowerCase();
+  if (known[key]) return known[key]!;
+  return slug.charAt(0).toUpperCase() + slug.slice(1);
+}
+
+export interface PlaybookSlot {
+  archetype: LayoutArchetype;
+  label: string;
+  patternHint: string;
+  features: string[];
+  referenceApp: string;
+  /** First two slots use “Like X for Y”; third is original. */
+  useLikeComparison: boolean;
+  /** Narrow topic angle for this card (discover + similar). */
+  nicheTopic?: string;
+  nicheLabel?: string;
+}
+
+const DISCOVER_BATCHES: { nicheLabel: string; topic: string }[][] = [
+  [
+    { nicheLabel: "Fitness & habits", topic: "home gym and workouts" },
+    { nicheLabel: "Pets & local services", topic: "dog walking for busy pet owners" },
+    { nicheLabel: "Money & food", topic: "budgeting and weekly meal prep" },
+  ],
+  [
+    { nicheLabel: "Cooking", topic: "easy home cooking and recipes" },
+    { nicheLabel: "Daily habits", topic: "building daily habits and streaks" },
+    { nicheLabel: "Local booking", topic: "booking tutors or nail appointments" },
+  ],
+  [
+    { nicheLabel: "Journaling", topic: "daily journaling and reflection" },
+    { nicheLabel: "Selling online", topic: "selling handmade or vintage goods" },
+    { nicheLabel: "Mindfulness", topic: "meditation and calm daily check-ins" },
+  ],
+];
+
+function slotFromArchetype(
+  archetype: LayoutArchetype,
+  index: number,
+  nicheTopic?: string,
+  nicheLabel?: string
+): PlaybookSlot {
+  const def = LAYOUT_ARCHETYPES[archetype];
+  const refSlug = def.matchApps[0] ?? "a popular app";
+  return {
+    archetype,
+    label: def.label,
+    patternHint: def.description,
+    features: [...def.defaultFeatures],
+    referenceApp: displayAppName(refSlug),
+    useLikeComparison: index < 2,
+    nicheTopic,
+    nicheLabel,
+  };
+}
+
+/** Lost-user discovery: 3 quality ideas in 3 different niches. */
+export function pickDiscoverSlots(variant = 0): PlaybookSlot[] {
+  const batch = DISCOVER_BATCHES[variant % DISCOVER_BATCHES.length]!;
+  return batch.map((row, index) => {
+    const inferred = inferArchetypeFromInterview(row.topic, "", "");
+    return slotFromArchetype(
+      inferred.archetype,
+      index,
+      row.topic,
+      row.nicheLabel
+    );
+  });
+}
+
+/** Three proven app patterns for a landing-page topic (e.g. gym → tracker + streak + library). */
+export function pickPlaybookSlotsForTopic(topic: string, variant = 0): PlaybookSlot[] {
+  const primary = inferArchetypeFromInterview(topic.trim(), "", "");
+  const baseAlts = ARCHETYPE_ALTERNATES[primary.archetype] ?? [
+    "habit-streak",
+    "content-library",
+  ];
+  const shift = ((variant % baseAlts.length) + baseAlts.length) % baseAlts.length;
+  const alts = [...baseAlts.slice(shift), ...baseAlts.slice(0, shift)];
+  const ids: LayoutArchetype[] = [primary.archetype];
+  if (variant > 0 && alts[0]) {
+    ids[0] = alts[0]!;
+  }
+  for (const alt of alts) {
+    if (!ids.includes(alt)) ids.push(alt);
+    if (ids.length >= 3) break;
+  }
+  for (const id of Object.keys(LAYOUT_ARCHETYPES) as LayoutArchetype[]) {
+    if (ids.length >= 3) break;
+    if (!ids.includes(id)) ids.push(id);
+  }
+
+  const topicAngle = topic.trim();
+  return ids.slice(0, 3).map((id, index) =>
+    slotFromArchetype(id, index, topicAngle || undefined)
+  );
+}
+
 /** Pick the best archetype from full-interview answers. */
 export function inferArchetypeFromInterview(
   idea: string,

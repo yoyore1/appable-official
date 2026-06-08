@@ -4,7 +4,9 @@
   "private": true,
   "description": "Appable web platform (getappable.com) — build your first app free.",
   "scripts": {
-    "dev": "next dev",
+    "dev": "next dev -H 0.0.0.0",
+    "expo:install": "cd expo-shell && npm install",
+    "expo:dev": "node scripts/start-expo-dev.mjs",
     "build": "next build",
     "start": "next start",
     "lint": "next lint",

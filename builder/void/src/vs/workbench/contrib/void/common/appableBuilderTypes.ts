@@ -13,10 +13,22 @@ export interface MasterBuildPrompt {
 	appName: string;
 	description: string;
 	audience: string;
+	/** What makes their version original; null on full interview. */
+	twist: string | null;
 	features: string[];
+	/** Internal blueprint — drives template assembly (matches web RN path). */
+	layoutArchetype: string;
 	vibe: Vibe;
 	colors: string;
 	screens: string[];
+	referenceApp: string | null;
+}
+
+/** Interview turns stored on the platform when syncing from Void. */
+export interface InterviewTurn {
+	questionId: string;
+	question: string;
+	answer: string;
 }
 
 export type BuildMode = 'base' | 'full';
@@ -116,6 +128,8 @@ export interface IAppableBuilderService {
 	generatePlan(answers: InterviewAnswers): Promise<MasterBuildPrompt>;
 	/** Fetch a saved plan from the platform by project ID (for the “I already have a plan” flow). */
 	fetchPlan(projectId: string): Promise<MasterBuildPrompt>;
+	/** Save in-Builder interview + plan to the platform (legal docs, project id). */
+	syncInterviewProject(answers: InterviewAnswers, masterPrompt: MasterBuildPrompt): Promise<{ projectId: string }>;
 	/** Fired when a web deep link (appable://handoff) is opened — auto-load the app. */
 	readonly onHandoff: Event<HandoffPayload>;
 	/** Pending handoff from startup URL, consumed once (renderer mounts after cold start). */

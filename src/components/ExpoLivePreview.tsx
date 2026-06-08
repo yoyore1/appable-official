@@ -1,6 +1,14 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type CSSProperties,
+  type KeyboardEvent,
+  type ReactNode,
+} from "react";
 import confetti from "canvas-confetti";
 import { motion, AnimatePresence } from "framer-motion";
 import {
@@ -64,6 +72,7 @@ import {
 import { withLegalSettings } from "@/lib/expoApp/smartInteractions";
 import { recipeListenText } from "@/lib/expoApp/recipeDetails";
 import type { TweakTarget } from "@/lib/expoApp/tweakPaths";
+import { DeviceMockup } from "@/components/DeviceMockup";
 import { cn } from "@/lib/utils";
 import {
   previewDeviceKind,
@@ -194,6 +203,7 @@ export function ExpoLivePreview({
   editMode,
   selectedPath,
   onSelectTarget,
+  showWatermark,
 }: {
   projectId?: string;
   model: ExpoAppModel | null;
@@ -208,6 +218,8 @@ export function ExpoLivePreview({
   editMode?: boolean;
   selectedPath?: string | null;
   onSelectTarget?: (target: TweakTarget) => void;
+  /** Free-tier "Made with Appable" badge on the preview. */
+  showWatermark?: boolean;
 }) {
   type LaunchPhase = "role" | "setup" | "onboarding" | "main";
   const [launchPhase, setLaunchPhase] = useState<LaunchPhase>("main");
@@ -251,6 +263,16 @@ export function ExpoLivePreview({
   const recorderRef = useRef<MediaRecorder | null>(null);
   const recordStreamRef = useRef<MediaStream | null>(null);
   const recordChunksRef = useRef<Blob[]>([]);
+
+  useEffect(() => {
+    if (!editMode) return;
+    setLaunchPhase("main");
+    setOnboarded(true);
+    setDetail(null);
+    setScanOpen(false);
+    setVoiceOpen(false);
+    setSettingsRow(null);
+  }, [editMode]);
 
   const previewModel = displayModel ?? model;
   const roleId = selectedRole?.id ?? null;
@@ -661,6 +683,7 @@ export function ExpoLivePreview({
     return (
       <PhoneShell className={className}>
         <BuildingSkeleton percent={buildPercent ?? 0} accent="#FF7A63" />
+        {showWatermark && <AppableWatermark />}
       </PhoneShell>
     );
   }
@@ -683,7 +706,7 @@ export function ExpoLivePreview({
   const readyModel = viewModel ?? displayModel;
 
   return (
-    <div className={cn("mx-auto w-full max-w-[340px]", className)}>
+    <div className="relative mx-auto w-full">
       <input
         ref={cameraRef}
         type="file"
@@ -707,7 +730,7 @@ export function ExpoLivePreview({
           e.target.value = "";
         }}
       />
-      <PhoneShell alive={alive}>
+      <PhoneShell alive={alive} className={className}>
         <div className="flex h-full flex-col" style={{ background: t.cream, ...fontStyle }}>
           <StatusBar />
 
@@ -970,6 +993,8 @@ export function ExpoLivePreview({
               Building… {Math.min(100, buildPercent ?? 0)}%
             </div>
           )}
+
+          {showWatermark && <AppableWatermark />}
         </div>
       </PhoneShell>
 
@@ -995,6 +1020,20 @@ export function ExpoLivePreview({
   );
 }
 
+function AppableWatermark() {
+  return (
+    <a
+      href="https://appable.app"
+      target="_blank"
+      rel="noopener noreferrer"
+      className="pointer-events-auto absolute bottom-[3.75rem] right-3 z-30 rounded-full bg-charcoal/55 px-2 py-0.5 text-[8px] font-semibold tracking-wide text-white/90 backdrop-blur-sm transition hover:bg-charcoal/70"
+      aria-label="Made with Appable"
+    >
+      Made with Appable
+    </a>
+  );
+}
+
 function PhoneShell({
   children,
   className,
@@ -1005,35 +1044,9 @@ function PhoneShell({
   alive?: boolean;
 }) {
   return (
-    <div className={cn("mx-auto w-full max-w-[340px]", className)}>
-      <motion.div
-        animate={
-          alive
-            ? {
-                boxShadow: [
-                  "0 20px 50px -12px rgba(255,122,99,0.15)",
-                  "0 24px 56px -8px rgba(255,122,99,0.28)",
-                  "0 20px 50px -12px rgba(255,122,99,0.15)",
-                ],
-              }
-            : undefined
-        }
-        transition={alive ? { duration: 3, repeat: Infinity, ease: "easeInOut" } : undefined}
-        className="relative rounded-[2.4rem] p-[5px] shadow-[0_20px_50px_-12px_rgba(43,38,36,0.22)]"
-        style={{
-          background: alive
-            ? "linear-gradient(145deg, #4a3f3c 0%, #2a2624 45%, #3d3836 100%)"
-            : "linear-gradient(145deg, #3d3836 0%, #1f1c1b 55%, #2a2624 100%)",
-        }}
-      >
-        <span className="absolute -left-[2px] top-[22%] h-8 w-[3px] rounded-l bg-charcoal/60" />
-        <span className="absolute -left-[2px] top-[34%] h-12 w-[3px] rounded-l bg-charcoal/60" />
-        <span className="absolute -right-[2px] top-[28%] h-14 w-[3px] rounded-r bg-charcoal/60" />
-        <div className="relative flex aspect-[9/19.5] flex-col overflow-hidden rounded-[2rem]">
-          {children}
-        </div>
-      </motion.div>
-    </div>
+    <DeviceMockup className={className} alive={alive}>
+      {children}
+    </DeviceMockup>
   );
 }
 
@@ -1339,14 +1352,20 @@ function ScanSheet({
   );
 }
 
-function StatusBar() {
+function StatusBar({ dark = false }: { dark?: boolean }) {
+  const ink = dark ? "text-white/85" : "text-charcoal/75";
+  const icon = dark ? "bg-white/70" : "bg-charcoal/45";
+  const batt = dark
+    ? "border-white/40 bg-white/20"
+    : "border-charcoal/35 bg-charcoal/15";
   return (
-    <div className="flex shrink-0 items-center justify-between px-4 pt-2.5">
-      <span className="text-[9px] font-semibold text-charcoal/70">9:41</span>
-      <div className="h-[18px] w-[72px] rounded-full bg-charcoal/90" aria-hidden />
-      <div className="flex gap-[3px]">
-        <span className="h-2 w-2 rounded-sm bg-charcoal/50" />
-        <span className="h-2 w-3 rounded-sm bg-charcoal/50" />
+    <div className="flex shrink-0 items-center justify-between px-4 pb-0.5 pt-[11px]">
+      <span className={`text-[10px] font-semibold tabular-nums ${ink}`}>9:41</span>
+      <span className="w-[72px]" aria-hidden />
+      <div className="flex items-center gap-[4px]">
+        <span className={`h-[5px] w-[5px] rounded-full ${icon}`} />
+        <span className={`h-[7px] w-[12px] rounded-[2px] ${icon}`} />
+        <span className={`h-[9px] w-[15px] rounded-[2px] border ${batt}`} />
       </div>
     </div>
   );
@@ -1672,28 +1691,41 @@ function Selectable({
   onSelectTarget,
   children,
   className,
+  style,
+  block,
 }: FixEditProps & {
   path: string;
   label: string;
   field: string;
   children: ReactNode;
   className?: string;
+  style?: CSSProperties;
+  /** Full-width tap target — use for buttons, cards, tab cells, settings rows */
+  block?: boolean;
 }) {
   if (!editMode || !onSelectTarget) return <>{children}</>;
   const selected = selectedPath === path;
+  const pick = (e: { stopPropagation: () => void; preventDefault: () => void }) => {
+    e.stopPropagation();
+    e.preventDefault();
+    onSelectTarget({ path, label, field });
+  };
   return (
     <div
       role="button"
       tabIndex={0}
-      onClick={(e) => {
-        e.stopPropagation();
-        e.preventDefault();
-        onSelectTarget({ path, label, field });
+      onClick={pick}
+      onKeyDown={(e) => {
+        if (e.key === "Enter" || e.key === " ") pick(e);
       }}
+      style={style}
       className={cn(
         className,
-        "rounded-lg transition",
-        selected ? "ring-2 ring-coral ring-offset-1" : "hover:ring-2 hover:ring-coral/35"
+        block && "block w-full cursor-pointer",
+        "relative z-[1] touch-manipulation rounded-xl transition",
+        selected
+          ? "ring-2 ring-coral ring-offset-1 ring-offset-transparent"
+          : "hover:ring-2 hover:ring-coral/45 active:ring-2 active:ring-coral/55"
       )}
     >
       {children}
@@ -1735,6 +1767,8 @@ function HomeScreen({
         field="Headline"
         selectedPath={selectedPath}
         onSelectTarget={onSelectTarget}
+        block
+        className="py-0.5"
       >
         <motion.p
           initial="hidden"
@@ -1754,7 +1788,8 @@ function HomeScreen({
         field="Subheadline"
         selectedPath={selectedPath}
         onSelectTarget={onSelectTarget}
-        className="mt-0.5 block"
+        block
+        className="mt-0.5 py-0.5"
       >
         <motion.p
           variants={fadeUp}
@@ -1775,19 +1810,29 @@ function HomeScreen({
         field="Hero button"
         selectedPath={selectedPath}
         onSelectTarget={onSelectTarget}
-        className="mt-2.5 block"
+        block
+        className="mt-2.5"
       >
-      <motion.button
-        type="button"
+      <motion.div
         variants={fadeUp}
         custom={2}
         initial="hidden"
         animate="show"
-        whileTap={editMode ? undefined : { scale: 0.97 }}
-        onClick={editMode ? undefined : onHero}
-        disabled={scanning}
-        className="flex w-full items-center gap-2 rounded-2xl p-2.5 text-left shadow-soft"
+        className={cn(
+          "flex w-full items-center gap-2 rounded-2xl p-2.5 text-left shadow-soft",
+          !editMode && "cursor-pointer"
+        )}
         style={{ background: t.accent }}
+        {...(!editMode
+          ? {
+              role: "button" as const,
+              tabIndex: 0,
+              onClick: onHero,
+              onKeyDown: (e: KeyboardEvent) => {
+                if (e.key === "Enter" || e.key === " ") onHero();
+              },
+            }
+          : {})}
       >
         <motion.span
           animate={hasScan ? { scale: [1, 1.06, 1] } : undefined}
@@ -1807,7 +1852,7 @@ function HomeScreen({
           </span>
         </span>
         <ChevronRight className="h-3.5 w-3.5 shrink-0 text-white/80" />
-      </motion.button>
+      </motion.div>
       </Selectable>
 
       {onVoice && (
@@ -1844,12 +1889,23 @@ function HomeScreen({
 
       {h.sections.map((sec, si) => (
         <div key={sec.title} className="mt-3">
-          <p
-            className="mb-1.5 text-[10px] font-bold uppercase tracking-wide"
-            style={{ color: t.muted }}
+          <Selectable
+            editMode={editMode}
+            path={`home.sections[${si}].title`}
+            label={sec.title}
+            field="Section title"
+            selectedPath={selectedPath}
+            onSelectTarget={onSelectTarget}
+            block
+            className="mb-1.5"
           >
-            {sec.title}
-          </p>
+            <p
+              className="text-[10px] font-bold uppercase tracking-wide"
+              style={{ color: t.muted }}
+            >
+              {sec.title}
+            </p>
+          </Selectable>
           <div className="space-y-1.5">
             {sec.items.map((item, i) => (
               <ItemCard
@@ -1916,6 +1972,8 @@ function TabScreen({
             field="Tab title"
             selectedPath={selectedPath}
             onSelectTarget={onSelectTarget}
+            block
+            className="py-0.5"
           >
             <p className="text-[12px] font-extrabold" style={{ color: t.charcoal }}>
               {screen.title}
@@ -1928,6 +1986,8 @@ function TabScreen({
             field="Tab subtitle"
             selectedPath={selectedPath}
             onSelectTarget={onSelectTarget}
+            block
+            className="py-0.5"
           >
             <p className="text-[10px]" style={{ color: t.muted }}>
               {screen.subtitle}
@@ -1949,36 +2009,71 @@ function TabScreen({
       <div className="mt-2 space-y-1.5">
         {screen.items.map((item, i) =>
           listsTab ? (
-            <div
-              key={item.id}
-              className="flex w-full items-center gap-2 rounded-xl border p-2"
-              style={{ borderColor: t.line, background: t.card }}
-            >
-              <button
-                type="button"
-                onClick={() => onToggle(item.id)}
-                className="grid h-4 w-4 shrink-0 place-items-center rounded-md border"
-                style={{
-                  borderColor: checked.has(item.id) ? t.accent : t.line,
-                  background: checked.has(item.id) ? t.accent : "transparent",
-                }}
-                aria-label={checked.has(item.id) ? "Uncheck" : "Check"}
+            editMode && onSelectTarget ? (
+              <Selectable
+                key={item.id}
+                editMode={editMode}
+                path={`tabScreens.${tabId}.items[${i}].title`}
+                label={item.title}
+                field="List item"
+                selectedPath={selectedPath}
+                onSelectTarget={onSelectTarget}
+                block
+                className="rounded-xl border p-2"
+                style={{ borderColor: t.line, background: t.card }}
               >
-                {checked.has(item.id) && <Check className="h-2.5 w-2.5 text-white" />}
-              </button>
-              <button
-                type="button"
-                onClick={() => onOpen(item)}
-                className="min-w-0 flex-1 text-left"
+                <div className="flex w-full items-center gap-2">
+                <span
+                  className="grid h-4 w-4 shrink-0 place-items-center rounded-md border"
+                  style={{
+                    borderColor: checked.has(item.id) ? t.accent : t.line,
+                    background: checked.has(item.id) ? t.accent : "transparent",
+                  }}
+                >
+                  {checked.has(item.id) && <Check className="h-2.5 w-2.5 text-white" />}
+                </span>
+                <span className="min-w-0 flex-1 text-left">
+                  <span className="block text-[10px] font-bold" style={{ color: t.charcoal }}>
+                    {item.title}
+                  </span>
+                  <span className="block text-[9px]" style={{ color: t.muted }}>
+                    {item.subtitle}
+                  </span>
+                </span>
+                </div>
+              </Selectable>
+            ) : (
+              <div
+                key={item.id}
+                className="flex w-full items-center gap-2 rounded-xl border p-2"
+                style={{ borderColor: t.line, background: t.card }}
               >
-                <span className="block text-[10px] font-bold" style={{ color: t.charcoal }}>
-                  {item.title}
-                </span>
-                <span className="block text-[9px]" style={{ color: t.muted }}>
-                  {item.subtitle}
-                </span>
-              </button>
-            </div>
+                <button
+                  type="button"
+                  onClick={() => onToggle(item.id)}
+                  className="grid h-4 w-4 shrink-0 place-items-center rounded-md border"
+                  style={{
+                    borderColor: checked.has(item.id) ? t.accent : t.line,
+                    background: checked.has(item.id) ? t.accent : "transparent",
+                  }}
+                  aria-label={checked.has(item.id) ? "Uncheck" : "Check"}
+                >
+                  {checked.has(item.id) && <Check className="h-2.5 w-2.5 text-white" />}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => onOpen(item)}
+                  className="min-w-0 flex-1 text-left"
+                >
+                  <span className="block text-[10px] font-bold" style={{ color: t.charcoal }}>
+                    {item.title}
+                  </span>
+                  <span className="block text-[9px]" style={{ color: t.muted }}>
+                    {item.subtitle}
+                  </span>
+                </button>
+              </div>
+            )
           ) : (
             <ItemCard
               key={item.id}
@@ -1998,8 +2093,12 @@ function TabScreen({
           <ItemCard
             key={item.id}
             item={item}
+            itemPath={`tabScreens.${tabId}.items[${screen.items.length + i}]`}
             theme={t}
             index={screen.items.length + i}
+            editMode={editMode}
+            selectedPath={selectedPath}
+            onSelectTarget={onSelectTarget}
             onOpen={() => onOpen(item)}
             onPrimaryAction={onPrimaryAction}
           />
@@ -2029,6 +2128,54 @@ function ItemCard({
 }) {
   const base = itemPath ?? "";
   const cardLabel = item.title || "Card";
+  const canFix = Boolean(editMode && itemPath && onSelectTarget);
+
+  const tagsRow = (
+    <span className="flex flex-wrap items-center gap-1">
+      {(item.tags ?? []).map((tag) => (
+        <span
+          key={tag}
+          className="rounded-md px-1 py-0.5 text-[7px] font-bold"
+          style={{ background: `${theme.accent}14`, color: theme.accent }}
+        >
+          {tag}
+        </span>
+      ))}
+      {item.badge && (
+        <span
+          className="rounded-md px-1 py-0.5 text-[7px] font-bold uppercase"
+          style={{ background: `${theme.accent}18`, color: theme.accent }}
+        >
+          {item.badge}
+        </span>
+      )}
+    </span>
+  );
+
+  const cardBody = (
+    <>
+      <CoverImage
+        src={item.imageUrl}
+        fallbackIndex={index}
+        className="h-11 w-11 shrink-0 rounded-xl object-cover"
+      />
+      <span className="min-w-0 flex-1 py-0.5">
+        {tagsRow}
+        <span className="mt-0.5 block text-[10px] font-bold leading-tight" style={{ color: theme.charcoal }}>
+          {item.title}
+        </span>
+        <span className="mt-0.5 block text-[9px] leading-snug" style={{ color: theme.muted }}>
+          {item.subtitle}
+        </span>
+        {item.meta && (
+          <span className="mt-0.5 block text-[8px] font-semibold" style={{ color: theme.accent }}>
+            {item.meta}
+          </span>
+        )}
+      </span>
+    </>
+  );
+
   return (
     <motion.div
       variants={fadeUp}
@@ -2038,102 +2185,109 @@ function ItemCard({
       className="overflow-hidden rounded-2xl border text-left shadow-sm"
       style={{ borderColor: theme.line, background: "#fff" }}
     >
-      <button
-        type="button"
-        onClick={editMode ? undefined : onOpen}
-        className="flex w-full gap-2 p-2 text-left"
-      >
-        <CoverImage
-          src={item.imageUrl}
-          fallbackIndex={index}
-          className="h-11 w-11 shrink-0 rounded-xl object-cover"
-        />
-        <span className="min-w-0 flex-1 py-0.5">
-          <span className="flex flex-wrap items-center gap-1">
-            {(item.tags ?? []).map((tag) => (
-              <span
-                key={tag}
-                className="rounded-md px-1 py-0.5 text-[7px] font-bold"
-                style={{ background: `${theme.accent}14`, color: theme.accent }}
-              >
-                {tag}
-              </span>
-            ))}
-            {item.badge && (
-              <span
-                className="rounded-md px-1 py-0.5 text-[7px] font-bold uppercase"
-                style={{ background: `${theme.accent}18`, color: theme.accent }}
-              >
-                {item.badge}
-              </span>
-            )}
-          </span>
+      {canFix ? (
+        <div className="p-2">
           <Selectable
-            editMode={editMode && Boolean(itemPath)}
+            editMode={editMode}
             path={`${base}.title`}
             label={cardLabel}
-            field="Title"
+            field="Card title"
             selectedPath={selectedPath}
             onSelectTarget={onSelectTarget}
-            className="block"
+            block
+            className="py-1"
           >
-            <span className="mt-0.5 block text-[10px] font-bold leading-tight" style={{ color: theme.charcoal }}>
-              {item.title}
-            </span>
+            <div className="flex w-full gap-2 text-left">
+              <CoverImage
+                src={item.imageUrl}
+                fallbackIndex={index}
+                className="h-11 w-11 shrink-0 rounded-xl object-cover"
+              />
+              <span className="min-w-0 flex-1 py-0.5">
+                {tagsRow}
+                <span className="mt-0.5 block text-[10px] font-bold leading-tight" style={{ color: theme.charcoal }}>
+                  {item.title}
+                </span>
+              </span>
+            </div>
           </Selectable>
           <Selectable
-            editMode={editMode && Boolean(itemPath)}
+            editMode={editMode}
             path={`${base}.subtitle`}
             label={cardLabel}
-            field="Subtitle"
+            field="Card subtitle"
             selectedPath={selectedPath}
             onSelectTarget={onSelectTarget}
-            className="block"
+            block
+            className="mt-1 py-1 pl-[3.25rem]"
           >
-            <span className="mt-0.5 block text-[9px] leading-snug" style={{ color: theme.muted }}>
+            <span className="block text-[9px] leading-snug" style={{ color: theme.muted }}>
               {item.subtitle}
             </span>
+            {item.meta && (
+              <span className="mt-0.5 block text-[8px] font-semibold" style={{ color: theme.accent }}>
+                {item.meta}
+              </span>
+            )}
           </Selectable>
-          {item.meta && (
-            <span className="mt-0.5 block text-[8px] font-semibold" style={{ color: theme.accent }}>
-              {item.meta}
-            </span>
-          )}
-        </span>
-      </button>
-      {item.quote && (
-        <p
-          className="mx-2 mb-2 rounded-lg border-l-2 px-2 py-1 text-[8px] italic leading-snug"
-          style={{ borderColor: theme.accent, color: theme.muted, background: theme.card }}
-        >
-          {item.quote}
-        </p>
+        </div>
+      ) : (
+        <button type="button" onClick={onOpen} className="flex w-full gap-2 p-2 text-left">
+          {cardBody}
+        </button>
       )}
-      {item.primaryAction && (
+      {item.quote && (
         <Selectable
-          editMode={editMode && Boolean(itemPath)}
-          path={`${base}.primaryAction`}
+          editMode={canFix}
+          path={`${base}.quote`}
           label={cardLabel}
-          field="Button label"
+          field="Quote"
           selectedPath={selectedPath}
           onSelectTarget={onSelectTarget}
-          className="mx-2 mb-2 block"
+          block
+          className="mx-2 mb-2"
         >
+          <p
+            className="rounded-lg border-l-2 px-2 py-1 text-[8px] italic leading-snug"
+            style={{ borderColor: theme.accent, color: theme.muted, background: theme.card }}
+          >
+            {item.quote}
+          </p>
+        </Selectable>
+      )}
+      {item.primaryAction &&
+        (canFix ? (
+          <Selectable
+            editMode={editMode}
+            path={`${base}.primaryAction`}
+            label={cardLabel}
+            field="Button label"
+            selectedPath={selectedPath}
+            onSelectTarget={onSelectTarget}
+            block
+            className="mx-2 mb-2"
+          >
+            <div
+              className="w-full rounded-xl py-2.5 text-center text-[9px] font-bold text-white"
+              style={{ background: theme.accent }}
+            >
+              {item.primaryAction}
+            </div>
+          </Selectable>
+        ) : (
           <button
             type="button"
             onClick={(e) => {
               e.stopPropagation();
-              if (editMode) return;
               if (onPrimaryAction) onPrimaryAction(item);
               else onOpen();
             }}
-            className="w-full rounded-xl py-2 text-[9px] font-bold text-white"
+            className="mx-2 mb-2 w-[calc(100%-1rem)] rounded-xl py-2 text-[9px] font-bold text-white"
             style={{ background: theme.accent }}
           >
             {item.primaryAction}
           </button>
-        </Selectable>
-      )}
+        ))}
     </motion.div>
   );
 }
@@ -2221,8 +2375,35 @@ function ProfileScreen({
         Settings
       </p>
       <div className="space-y-1">
-        {p.settings.map((row) => {
+        {p.settings.map((row, ri) => {
           const Icon = ICONS[row.icon] ?? Settings;
+          const rowInner = (
+            <>
+              <Icon className="h-3.5 w-3.5" style={{ color: t.accent }} />
+              <span className="flex-1 text-[10px] font-semibold" style={{ color: t.charcoal }}>
+                {row.label}
+              </span>
+              <ChevronRight className="h-3 w-3" style={{ color: t.muted }} />
+            </>
+          );
+          if (editMode && onSelectTarget) {
+            return (
+              <Selectable
+                key={row.label}
+                editMode={editMode}
+                path={`profile.settings[${ri}].label`}
+                label={row.label}
+                field="Settings row"
+                selectedPath={selectedPath}
+                onSelectTarget={onSelectTarget}
+                block
+                className="rounded-xl border px-2 py-2.5"
+                style={{ borderColor: t.line, background: t.card }}
+              >
+                <div className="flex w-full items-center gap-2 text-left">{rowInner}</div>
+              </Selectable>
+            );
+          }
           return (
             <button
               key={row.label}
@@ -2231,11 +2412,7 @@ function ProfileScreen({
               className="flex w-full items-center gap-2 rounded-xl border px-2 py-2 text-left transition active:scale-[0.98]"
               style={{ borderColor: t.line, background: t.card }}
             >
-              <Icon className="h-3.5 w-3.5" style={{ color: t.accent }} />
-              <span className="flex-1 text-[10px] font-semibold" style={{ color: t.charcoal }}>
-                {row.label}
-              </span>
-              <ChevronRight className="h-3 w-3" style={{ color: t.muted }} />
+              {rowInner}
             </button>
           );
         })}
@@ -2266,6 +2443,37 @@ function TabBar({
       {tabs.map((tab, ti) => {
         const Icon = ICONS[tab.icon] ?? Home;
         const on = active === tab.id;
+        const cell = (
+          <>
+            <Icon
+              className="h-3.5 w-3.5"
+              style={{ color: on ? theme.accent : theme.muted }}
+            />
+            <span
+              className="max-w-full truncate text-[9px] font-semibold"
+              style={{ color: on ? theme.accent : theme.muted }}
+            >
+              {tab.label}
+            </span>
+          </>
+        );
+        if (editMode && onSelectTarget) {
+          return (
+            <Selectable
+              key={tab.id}
+              editMode={editMode}
+              path={`tabs[${ti}].label`}
+              label={`${tab.label} tab`}
+              field="Tab label"
+              selectedPath={selectedPath}
+              onSelectTarget={onSelectTarget}
+              block
+              className="flex flex-1 flex-col items-center gap-0.5 py-1.5"
+            >
+              {cell}
+            </Selectable>
+          );
+        }
         return (
           <button
             key={tab.id}
@@ -2273,25 +2481,7 @@ function TabBar({
             onClick={() => onSelect(tab.id)}
             className="flex flex-1 flex-col items-center gap-0.5 py-0.5"
           >
-            <Icon
-              className="h-3.5 w-3.5"
-              style={{ color: on ? theme.accent : theme.muted }}
-            />
-            <Selectable
-              editMode={editMode}
-              path={`tabs[${ti}].label`}
-              label={`${tab.label} tab`}
-              field="Tab label"
-              selectedPath={selectedPath}
-              onSelectTarget={onSelectTarget}
-            >
-              <span
-                className="max-w-full truncate text-[9px] font-semibold"
-                style={{ color: on ? theme.accent : theme.muted }}
-              >
-                {tab.label}
-              </span>
-            </Selectable>
+            {cell}
           </button>
         );
       })}

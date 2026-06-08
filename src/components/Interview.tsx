@@ -501,7 +501,8 @@ export function Interview({
         <AiBudgetBar
           projectId={projectId}
           refreshKey={budgetKey}
-          className="mb-2 shrink-0"
+          variant="pill"
+          className="mb-2 shrink-0 self-end"
         />
       ) : null}
 

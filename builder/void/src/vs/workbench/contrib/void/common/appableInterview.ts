@@ -25,6 +25,7 @@ export const BUILDING_STEPS = [
 	'Reading your idea ✨',
 	'Designing your onboarding',
 	'Setting up your screens',
+	'Tailoring privacy & support…',
 	'Making it beautiful…',
 	'Almost there',
 ];
@@ -72,6 +73,7 @@ export function buildAppSteps(mp?: MasterBuildPrompt | null): BuildAppStep[] {
 		{ label: palette ? `Applying ${palette} tones` : 'Applying your palette', atPercent: 58 },
 		{ label: 'Setting up your screens', atPercent: 64 },
 		{ label: 'Writing SwiftUI code', atPercent: 70 },
+		{ label: 'Tailoring privacy & support for this app…', atPercent: 74 },
 		{ label: 'Running a quality check', atPercent: 76 },
 		{ label: 'Polishing the details', atPercent: 82 },
 		{ label: 'Making it beautiful…', atPercent: 88 },
