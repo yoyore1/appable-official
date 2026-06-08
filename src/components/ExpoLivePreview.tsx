@@ -36,6 +36,7 @@ import {
   ImageIcon,
   Share2,
 } from "lucide-react";
+import { AppleLogo, GoogleLogo } from "@/components/OAuthBrandIcons";
 import type {
   ExpoAppCapabilities,
   ExpoAppFlow,
@@ -221,7 +222,7 @@ export function ExpoLivePreview({
   /** Free-tier "Made with Appable" badge on the preview. */
   showWatermark?: boolean;
 }) {
-  type LaunchPhase = "role" | "setup" | "onboarding" | "main";
+  type LaunchPhase = "auth" | "role" | "setup" | "onboarding" | "main";
   const [launchPhase, setLaunchPhase] = useState<LaunchPhase>("main");
   const [onboardIdx, setOnboardIdx] = useState(0);
   const [onboarded, setOnboarded] = useState(Boolean(startPastOnboarding));
@@ -312,6 +313,12 @@ export function ExpoLivePreview({
     setSelectedRole(null);
     setOnboardIdx(0);
 
+    if (model.flow?.auth?.enabled) {
+      setLaunchPhase("auth");
+      setOnboarded(false);
+      return;
+    }
+
     if (model.flow?.roles?.length) {
       setLaunchPhase("role");
       setOnboarded(Boolean(startPastOnboarding));
@@ -331,6 +338,54 @@ export function ExpoLivePreview({
       setOnboarded(true);
     }
   }, [model, startPastOnboarding]);
+
+  function finishAuthSignUp(role: ExpoUserRole | null) {
+    const m = previewModel ?? model;
+    if (role) {
+      setSelectedRole(role);
+      setTab("home");
+    }
+    if (m?.onboarding.length && !startPastOnboarding) {
+      setLaunchPhase("onboarding");
+      setOnboarded(false);
+    } else {
+      setOnboarded(true);
+      setLaunchPhase("main");
+      setTab("home");
+    }
+  }
+
+  function resetPreviewSession(message: string) {
+    const m = previewModel ?? model;
+    setSettingsRow(null);
+    setSavedIds(new Set());
+    setSettingsToggles({});
+    setSelectedRole(null);
+    setOnboardIdx(0);
+    if (m?.flow?.auth?.enabled) {
+      setLaunchPhase("auth");
+      setOnboarded(false);
+    } else if (m?.flow?.roles?.length) {
+      setLaunchPhase("role");
+      setOnboarded(Boolean(startPastOnboarding));
+    } else if (m?.onboarding.length && !startPastOnboarding) {
+      setLaunchPhase("onboarding");
+      setOnboarded(false);
+    } else {
+      setLaunchPhase("main");
+      setOnboarded(Boolean(startPastOnboarding));
+    }
+    setTab(m?.tabs[0]?.id ?? "home");
+    setToast(message);
+  }
+
+  function handleAccountAction(action: "sign_out" | "delete_account") {
+    if (action === "sign_out") {
+      resetPreviewSession("Signed out");
+      return;
+    }
+    resetPreviewSession("Account deleted (preview)");
+  }
 
   useEffect(() => {
     setItemPatches({});
@@ -738,6 +793,16 @@ export function ExpoLivePreview({
             <AnimatePresence mode="wait">
               {building && !showLive ? (
                 <BuildingSkeleton key="skel" percent={buildPercent ?? 0} accent={t.accent} />
+              ) : launchPhase === "auth" &&
+                readyModel.flow?.auth?.enabled &&
+                readyModel.flow ? (
+                <AuthSignUpScreen
+                  key="auth"
+                  projectId={projectId}
+                  flow={readyModel.flow}
+                  theme={t}
+                  onSuccess={finishAuthSignUp}
+                />
               ) : launchPhase === "role" && readyModel.flow?.roles?.length ? (
                 <RoleSelectScreen
                   key="role"
@@ -903,6 +968,7 @@ export function ExpoLivePreview({
                   setToast(`${settingsRow} ${on ? "on" : "off"}`);
                 }}
                 onOpenLegal={openLegal}
+                onAccountAction={handleAccountAction}
                 onClose={() => setSettingsRow(null)}
               />
             )}
@@ -1428,6 +1494,247 @@ function RoleSelectScreen({
           </motion.button>
         ))}
       </div>
+    </motion.div>
+  );
+}
+
+function AuthSignUpScreen({
+  projectId,
+  flow,
+  theme,
+  onSuccess,
+}: {
+  projectId?: string;
+  flow: ExpoAppFlow;
+  theme: ExpoAppModel["theme"];
+  onSuccess: (role: ExpoUserRole | null) => void;
+}) {
+  const auth = flow.auth!;
+  const t = theme;
+  const roles = flow.roles ?? [];
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [name, setName] = useState("");
+  const [roleId, setRoleId] = useState(roles[0]?.id ?? "");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const showGoogle = auth.showGoogleSignIn !== false;
+  const showApple = auth.showAppleSignIn !== false;
+  const showOAuth = showGoogle || showApple;
+
+  const canSubmit =
+    email.trim().includes("@") &&
+    password.length >= 6 &&
+    (!auth.captureName || name.trim().length > 0) &&
+    (!auth.captureRoleInSignUp || roleId);
+
+  function pickRoleAfterAuth(): ExpoUserRole | null {
+    const picked = roles.find((r) => r.id === roleId) ?? null;
+    return auth.captureRoleInSignUp ? picked : null;
+  }
+
+  function requireRoleForOAuth(): boolean {
+    if (!auth.captureRoleInSignUp || roleId) return true;
+    setError("Pick owner or walker first, then continue with Google or Apple.");
+    return false;
+  }
+
+  async function oauthSignIn(provider: "google" | "apple") {
+    if (!requireRoleForOAuth()) return;
+    setBusy(true);
+    setError(null);
+    try {
+      if (auth.liveSupabase && projectId) {
+        const cfgRes = await fetch(`/api/projects/${projectId}/supabase-public`);
+        if (!cfgRes.ok) {
+          throw new Error("Link Supabase in Connections first.");
+        }
+        const cfg = (await cfgRes.json()) as { url: string; anonKey: string };
+        const { createClient } = await import("@supabase/supabase-js");
+        const supabase = createClient(cfg.url, cfg.anonKey);
+        const { error: oauthErr } = await supabase.auth.signInWithOAuth({
+          provider,
+          options: { redirectTo: window.location.href },
+        });
+        if (oauthErr) {
+          const msg = oauthErr.message.toLowerCase();
+          throw new Error(
+            /provider|enabled|not enabled|unsupported/.test(msg)
+              ? `Not set up yet — open Connections on the right → Set up ${provider === "google" ? "Google" : "Apple"} login and follow the steps. Email still works for testing.`
+              : oauthErr.message
+          );
+        }
+        return;
+      }
+      onSuccess(pickRoleAfterAuth());
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Sign-in failed — try again.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function submit() {
+    if (!canSubmit) return;
+    setBusy(true);
+    setError(null);
+    try {
+      if (auth.liveSupabase && projectId) {
+        const res = await fetch(`/api/projects/${projectId}/preview-signup`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            email: email.trim(),
+            password,
+            displayName: name.trim(),
+            role: auth.captureRoleInSignUp ? roleId : null,
+          }),
+        });
+        const payload = (await res.json()) as { error?: string; ok?: boolean };
+        if (!res.ok) {
+          throw new Error(payload.error ?? "Sign-up failed");
+        }
+      }
+      onSuccess(pickRoleAfterAuth());
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Sign-up failed — try again.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const inputClass =
+    "mt-1 w-full rounded-xl border px-2.5 py-2 text-[10px] outline-none focus:ring-2 focus:ring-coral/25";
+  const inputStyle = {
+    borderColor: t.line,
+    background: "#fff",
+    color: t.charcoal,
+  };
+
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: 12 }}
+      animate={{ opacity: 1, y: 0 }}
+      className="flex h-full flex-col overflow-y-auto pb-2"
+    >
+      <p className="text-[12px] font-extrabold" style={{ color: t.charcoal }}>
+        {auth.signUpTitle}
+      </p>
+      {auth.signUpSubtitle && (
+        <p className="mt-0.5 text-[9px]" style={{ color: t.muted }}>
+          {auth.signUpSubtitle}
+        </p>
+      )}
+      {auth.captureRoleInSignUp && roles.length > 0 && (
+        <div className="mt-2">
+          <p className="text-[9px] font-semibold" style={{ color: t.charcoal }}>
+            I am a… *
+          </p>
+          <div className="mt-1 flex flex-wrap gap-1">
+            {roles.map((role) => {
+              const selected = roleId === role.id;
+              return (
+                <button
+                  key={role.id}
+                  type="button"
+                  onClick={() => setRoleId(role.id)}
+                  className="rounded-lg border px-2 py-1 text-[9px] font-semibold transition"
+                  style={{
+                    borderColor: selected ? t.accent : t.line,
+                    background: selected ? `${t.accent}18` : "#fff",
+                    color: t.charcoal,
+                  }}
+                >
+                  {role.emoji ? `${role.emoji} ` : ""}
+                  {role.label}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
+      {showOAuth && (
+        <div className="mt-3 space-y-1.5">
+          {showGoogle && (
+            <button
+              type="button"
+              disabled={busy}
+              onClick={() => void oauthSignIn("google")}
+              className="flex w-full items-center justify-center gap-2 rounded-xl border py-2 text-[10px] font-bold disabled:opacity-50"
+              style={{ borderColor: t.line, background: "#fff", color: t.charcoal }}
+            >
+              <GoogleLogo className="h-4 w-4" />
+              Continue with Google
+            </button>
+          )}
+          {showApple && (
+            <button
+              type="button"
+              disabled={busy}
+              onClick={() => void oauthSignIn("apple")}
+              className="flex w-full items-center justify-center gap-2 rounded-xl py-2 text-[10px] font-bold text-white disabled:opacity-50"
+              style={{ background: "#000" }}
+            >
+              <AppleLogo className="h-4 w-4" fill="#fff" />
+              Continue with Apple
+            </button>
+          )}
+          <p className="py-0.5 text-center text-[8px] font-semibold uppercase tracking-wide" style={{ color: t.muted }}>
+            or use email
+          </p>
+        </div>
+      )}
+      <div className="mt-2 space-y-2">
+        <label className="block text-[9px] font-semibold" style={{ color: t.charcoal }}>
+          Email *
+          <input
+            type="email"
+            autoComplete="email"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            className={inputClass}
+            style={inputStyle}
+            placeholder="you@email.com"
+          />
+        </label>
+        <label className="block text-[9px] font-semibold" style={{ color: t.charcoal }}>
+          Password *
+          <input
+            type="password"
+            autoComplete="new-password"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            className={inputClass}
+            style={inputStyle}
+            placeholder="6+ characters"
+          />
+        </label>
+        {auth.captureName && (
+          <label className="block text-[9px] font-semibold" style={{ color: t.charcoal }}>
+            Name *
+            <input
+              type="text"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              className={inputClass}
+              style={inputStyle}
+              placeholder="Your name"
+            />
+          </label>
+        )}
+      </div>
+      {error && <p className="mt-2 text-[9px] text-red-600">{error}</p>}
+      <motion.button
+        type="button"
+        whileTap={{ scale: 0.97 }}
+        disabled={!canSubmit || busy}
+        onClick={() => void submit()}
+        className="mt-4 w-full rounded-2xl py-2.5 text-[10px] font-bold text-white disabled:opacity-45"
+        style={{ background: t.accent }}
+      >
+        {busy ? "Creating account…" : auth.submitLabel}
+      </motion.button>
     </motion.div>
   );
 }
@@ -2497,6 +2804,7 @@ function SettingsSheet({
   toggled,
   onToggle,
   onOpenLegal,
+  onAccountAction,
   onClose,
 }: {
   label: string;
@@ -2506,10 +2814,13 @@ function SettingsSheet({
   toggled: boolean;
   onToggle: (on: boolean) => void;
   onOpenLegal: (doc: "privacy" | "terms" | "support") => void;
+  onAccountAction: (action: "sign_out" | "delete_account") => void;
   onClose: () => void;
 }) {
+  const [confirmDelete, setConfirmDelete] = useState(false);
   const kind = binding?.kind ?? "info";
   const legalDoc = binding?.legalDoc;
+  const accountAction = binding?.accountAction;
   const description = binding?.description ?? `${label}. Saved for this session.`;
 
   return (
@@ -2568,14 +2879,62 @@ function SettingsSheet({
             {projectId ? `Open ${legalDoc} page` : "Included in published app"}
           </button>
         )}
-        <button
-          type="button"
-          onClick={onClose}
-          className="mt-3 w-full rounded-xl py-2 text-[9px] font-bold text-white"
-          style={{ background: theme.accent }}
-        >
-          Done
-        </button>
+        {kind === "account" && accountAction === "sign_out" && (
+          <button
+            type="button"
+            onClick={() => onAccountAction("sign_out")}
+            className="mt-3 w-full rounded-xl border py-2 text-[9px] font-bold"
+            style={{ borderColor: theme.line, color: theme.charcoal, background: theme.cream }}
+          >
+            Sign out
+          </button>
+        )}
+        {kind === "account" && accountAction === "delete_account" && (
+          <div className="mt-3 space-y-2">
+            {!confirmDelete ? (
+              <button
+                type="button"
+                onClick={() => setConfirmDelete(true)}
+                className="w-full rounded-xl border border-red-200 py-2 text-[9px] font-bold text-red-700"
+                style={{ background: "#fef2f2" }}
+              >
+                Delete my account
+              </button>
+            ) : (
+              <>
+                <p className="text-[9px] font-semibold text-red-800">
+                  This removes your account and data. Cannot be undone.
+                </p>
+                <button
+                  type="button"
+                  onClick={() => onAccountAction("delete_account")}
+                  className="w-full rounded-xl py-2 text-[9px] font-bold text-white"
+                  style={{ background: "#dc2626" }}
+                >
+                  Yes, delete account
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setConfirmDelete(false)}
+                  className="w-full rounded-xl border py-2 text-[9px] font-bold"
+                  style={{ borderColor: theme.line, color: theme.muted, background: theme.cream }}
+                >
+                  Cancel
+                </button>
+              </>
+            )}
+          </div>
+        )}
+        {kind !== "account" && (
+          <button
+            type="button"
+            onClick={onClose}
+            className="mt-3 w-full rounded-xl py-2 text-[9px] font-bold text-white"
+            style={{ background: theme.accent }}
+          >
+            Done
+          </button>
+        )}
       </motion.div>
     </motion.div>
   );

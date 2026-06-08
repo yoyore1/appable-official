@@ -4,7 +4,6 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import {
   Check,
-  Hammer,
   Loader2,
   MousePointer2,
   Pencil,
@@ -19,10 +18,20 @@ import { PreviewFixPanel } from "@/components/PreviewFixPanel";
 import { ExpoLivePreview } from "@/components/ExpoLivePreview";
 import { ExpoPhoneGuide } from "@/components/ExpoPhoneGuide";
 import { PreviewCanvasPicker } from "@/components/PreviewCanvasPicker";
-import { ReadinessChecklist } from "@/components/ReadinessChecklist";
+import { BrainstormBuildHandoff } from "@/components/BrainstormBuildHandoff";
+import { BuildSidePanel } from "@/components/BuildSidePanel";
 import { ReadinessSuggestionBar } from "@/components/ReadinessSuggestionBar";
+import { defaultBrainstormState } from "@/lib/expoApp/brainstormContext";
 import { TypingIndicator } from "@/components/TypingIndicator";
 import { formatBuildRecap } from "@/lib/expoApp/buildRecap";
+import { applyConnectorsToAudit } from "@/lib/connectors/readinessConnector";
+import { enrichOAuthSetupStatus } from "@/lib/expoApp/oauthReadiness";
+import {
+  getConnectorRecommendations,
+  inferConnectorNeeds,
+  mergeConnectorNeeds,
+  type ConnectorRecommendation,
+} from "@/lib/connectors/registry";
 import {
   auditAppReadiness,
   defaultReadinessState,
@@ -40,6 +49,7 @@ import type { SelectionTweakAction } from "@/lib/expoApp/applySelectionTweak";
 import { getStringAtPath, type TweakTarget } from "@/lib/expoApp/tweakPaths";
 import type { ExpoAppModel } from "@/lib/expoApp/types";
 import {
+  clearBrainstormBuildSuggestion,
   expoBrainstormChat,
   expoSelectionTweak,
   expoTweakChat,
@@ -48,17 +58,43 @@ import {
   runExpoWebBuild,
   updateExpoPlan,
 } from "@/server/projects";
-import type { BrainstormTurn } from "@/lib/expoApp/brainstormChat";
 import type {
+  BrainstormTurn,
   InterviewTurn,
   MasterBuildPrompt,
+  ProjectBrainstormState,
   ProjectReadinessState,
+  RailwayConnectorPublic,
+  RevenueCatConnectorPublic,
+  SupabaseConnectorPublic,
 } from "@/lib/types";
 
 type Phase = "summary" | "edit" | "building" | "done";
 
-type Bubble = { id: string; role: "ai" | "user"; text: string; brainstorm?: boolean };
+type Bubble = {
+  id: string;
+  role: "ai" | "user";
+  text: string;
+  brainstorm?: boolean;
+  /** Live brainstorm thread — replaced from server, not appended one-by-one. */
+  brainstormChat?: boolean;
+};
 type ChatMode = "brainstorm" | "build";
+
+function brainstormHistoryToBubbles(history: BrainstormTurn[]): Bubble[] {
+  return history.map((turn, i) => ({
+    id: `bchat-${i}-${turn.role}`,
+    role: turn.role === "user" ? "user" : "ai",
+    text: turn.content,
+    brainstorm: true,
+    brainstormChat: true,
+  }));
+}
+
+function mergeBrainstormBubbles(prev: Bubble[], history: BrainstormTurn[]) {
+  const intro = prev.filter((b) => !b.brainstormChat);
+  return [...intro, ...brainstormHistoryToBubbles(history)];
+}
 
 export function ExpoBuildRoom({
   projectId,
@@ -68,6 +104,10 @@ export function ExpoBuildRoom({
   showWatermark = false,
   previewToken,
   initialReadinessState,
+  initialBrainstormState,
+  initialSupabaseConnector = null,
+  initialRevenueCatConnector = null,
+  initialRailwayConnector = null,
   className = "",
 }: {
   projectId: string;
@@ -77,6 +117,10 @@ export function ExpoBuildRoom({
   showWatermark?: boolean;
   previewToken: string | null;
   initialReadinessState?: ProjectReadinessState | null;
+  initialBrainstormState?: ProjectBrainstormState | null;
+  initialSupabaseConnector?: SupabaseConnectorPublic | null;
+  initialRevenueCatConnector?: RevenueCatConnectorPublic | null;
+  initialRailwayConnector?: RailwayConnectorPublic | null;
   className?: string;
 }) {
   const [plan, setPlan] = useState(initialPlan);
@@ -89,8 +133,9 @@ export function ExpoBuildRoom({
   const [buildLabels, setBuildLabels] = useState<string[]>([]);
   const [tweakInput, setTweakInput] = useState("");
   const [chatMode, setChatMode] = useState<ChatMode>("brainstorm");
-  const [brainstormHistory, setBrainstormHistory] = useState<BrainstormTurn[]>([]);
-  const [lastBrainstormPlan, setLastBrainstormPlan] = useState<string | null>(null);
+  const [brainstormState, setBrainstormState] = useState<ProjectBrainstormState>(
+    () => initialBrainstormState ?? defaultBrainstormState()
+  );
   const [fixMode, setFixMode] = useState(false);
   const [fixTarget, setFixTarget] = useState<TweakTarget | null>(null);
   const [fixBusy, setFixBusy] = useState(false);
@@ -98,8 +143,22 @@ export function ExpoBuildRoom({
   const [readinessState, setReadinessState] = useState<ProjectReadinessState>(
     () => initialReadinessState ?? defaultReadinessState()
   );
+  const [supabaseConnector, setSupabaseConnector] =
+    useState<SupabaseConnectorPublic | null>(initialSupabaseConnector);
+  const [revenueCatConnector, setRevenueCatConnector] =
+    useState<RevenueCatConnectorPublic | null>(initialRevenueCatConnector);
+  const [railwayConnector, setRailwayConnector] =
+    useState<RailwayConnectorPublic | null>(initialRailwayConnector);
   const endRef = useRef<HTMLDivElement>(null);
-  const chatInputRef = useRef<HTMLInputElement>(null);
+  const chatInputRef = useRef<HTMLTextAreaElement>(null);
+  const chatSubmittingRef = useRef(false);
+
+  function resizeChatInput() {
+    const el = chatInputRef.current;
+    if (!el) return;
+    el.style.height = "auto";
+    el.style.height = `${Math.min(el.scrollHeight, 160)}px`;
+  }
   const buildTimers = useRef<ReturnType<typeof setInterval>[]>([]);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const serverPercentRef = useRef(0);
@@ -113,17 +172,60 @@ export function ExpoBuildRoom({
     [appModel, plan, interview]
   );
 
-  const readinessAudit = useMemo(
+  const inferredConnectorNeeds = useMemo(
     () =>
-      baseReadinessAudit
-        ? enrichAuditWithState(
-            baseReadinessAudit,
-            readinessState,
-            readinessState.pinnedItemId
-          )
-        : null,
-    [baseReadinessAudit, readinessState]
+      inferConnectorNeeds({
+        mp: plan,
+        interview,
+        audit: baseReadinessAudit,
+      }),
+    [plan, interview, baseReadinessAudit]
   );
+
+  const lastUserBrainstorm = useMemo(() => {
+    for (let i = brainstormState.history.length - 1; i >= 0; i--) {
+      if (brainstormState.history[i]?.role === "user") {
+        return brainstormState.history[i]!.content;
+      }
+    }
+    return "";
+  }, [brainstormState.history]);
+
+  const connectorNeeds = useMemo(
+    () => mergeConnectorNeeds(inferredConnectorNeeds, lastUserBrainstorm),
+    [inferredConnectorNeeds, lastUserBrainstorm]
+  );
+
+  const connectorRecommendations = useMemo((): ConnectorRecommendation[] => {
+    return getConnectorRecommendations(
+      { supabase: supabaseConnector, revenueCat: revenueCatConnector, railway: railwayConnector },
+      connectorNeeds
+    );
+  }, [supabaseConnector, revenueCatConnector, railwayConnector, connectorNeeds]);
+
+  const readinessAudit = useMemo(() => {
+    if (!baseReadinessAudit) return null;
+    const withState = enrichAuditWithState(
+      baseReadinessAudit,
+      readinessState,
+      readinessState.pinnedItemId
+    );
+    const withConnectors = applyConnectorsToAudit(
+      withState,
+      supabaseConnector,
+      revenueCatConnector,
+      railwayConnector
+    );
+    const authInPreview = Boolean(appModel?.flow?.auth?.enabled);
+    return enrichOAuthSetupStatus(withConnectors, authInPreview, readinessState);
+  }, [
+    baseReadinessAudit,
+    readinessState,
+    supabaseConnector,
+    revenueCatConnector,
+    railwayConnector,
+    appModel?.flow?.auth?.enabled,
+  ]);
 
   const pinnedItem = useMemo(
     () =>
@@ -136,20 +238,44 @@ export function ExpoBuildRoom({
     [readinessAudit]
   );
 
+  const [activeSuggestionId, setActiveSuggestionId] = useState<string | null>(null);
+
+  const highlightedSuggestionId = useMemo(() => {
+    if (
+      activeSuggestionId &&
+      readinessSuggestions.some((s) => s.id === activeSuggestionId)
+    ) {
+      return activeSuggestionId;
+    }
+    const pinnedMatch = readinessSuggestions.find(
+      (s) => s.itemId === readinessState.pinnedItemId
+    );
+    if (pinnedMatch) return pinnedMatch.id;
+    return readinessSuggestions[0]?.id ?? null;
+  }, [activeSuggestionId, readinessSuggestions, readinessState.pinnedItemId]);
+
   function pickReadinessSuggestion(suggestion: ReadinessSuggestion) {
-    setChatMode("brainstorm");
-    setTweakInput(suggestion.prompt);
+    setActiveSuggestionId(suggestion.id);
+    setTweakInput(
+      chatMode === "build" ? suggestion.buildPrompt : suggestion.prompt
+    );
+
     const item = readinessAudit?.items.find((i) => i.id === suggestion.itemId);
     if (item) {
       setReadinessState((s) => ({ ...s, pinnedItemId: item.id }));
-      void patchProjectReadiness(projectId, { pinnedItemId: item.id });
+      void patchProjectReadiness(projectId, { pinnedItemId: item.id }).then((res) => {
+        if (res.ok) setReadinessState(res.state);
+      });
     }
+
     requestAnimationFrame(() => chatInputRef.current?.focus());
   }
 
   function askAboutReadiness(item: ReadinessItem) {
     setChatMode("brainstorm");
     setTweakInput(`What do I need for "${item.title}"?`);
+    const match = readinessSuggestions.find((s) => s.itemId === item.id);
+    if (match) setActiveSuggestionId(match.id);
     setReadinessState((s) => ({ ...s, pinnedItemId: item.id }));
     void patchProjectReadiness(projectId, { pinnedItemId: item.id }).then((res) => {
       if (res.ok) setReadinessState(res.state);
@@ -157,6 +283,9 @@ export function ExpoBuildRoom({
   }
 
   function setReadinessDecision(item: ReadinessItem, decision: ReadinessDecision) {
+    const current = readinessState.items[item.id]?.decision ?? null;
+    const nextDecision = current === decision ? null : decision;
+
     setReadinessState((s) => ({
       ...s,
       pinnedItemId: item.id,
@@ -165,14 +294,14 @@ export function ExpoBuildRoom({
         [item.id]: {
           discussed: true,
           discussedAt: new Date().toISOString(),
-          decision,
+          decision: nextDecision,
         },
       },
     }));
     void patchProjectReadiness(projectId, {
       itemId: item.id,
       discussed: true,
-      decision,
+      decision: nextDecision,
       pinnedItemId: item.id,
     }).then((res) => {
       if (res.ok) setReadinessState(res.state);
@@ -192,6 +321,16 @@ export function ExpoBuildRoom({
     });
   }
 
+  function handoffToBuild(prompt: string) {
+    setChatMode("build");
+    setTweakInput(prompt);
+    setBrainstormState((s) => ({ ...s, pendingBuild: null }));
+    void clearBrainstormBuildSuggestion(projectId).then((res) => {
+      if (res.ok) setBrainstormState(res.brainstormState);
+    });
+    requestAnimationFrame(() => chatInputRef.current?.focus());
+  }
+
   const [editForm, setEditForm] = useState({
     appName: plan.appName,
     description: plan.description,
@@ -203,6 +342,10 @@ export function ExpoBuildRoom({
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [bubbles, phase, buildPercent]);
+
+  useEffect(() => {
+    resizeChatInput();
+  }, [tweakInput]);
 
   useEffect(() => {
     void fetch("/api/expo/start", { method: "POST" });
@@ -238,6 +381,7 @@ export function ExpoBuildRoom({
           text: formatReadinessChecklist(audit),
           brainstorm: true,
         },
+        ...brainstormHistoryToBubbles(initialBrainstormState?.history ?? []),
       ]);
       return;
     }
@@ -256,7 +400,7 @@ export function ExpoBuildRoom({
         text: "Look good? **Confirm** to start building, or **Edit** if you want to tweak anything first.",
       },
     ]);
-  }, [projectId, initialPlan, initialModel, interview]);
+  }, [projectId, initialPlan, initialModel, interview, initialBrainstormState]);
 
   function clearBuildTimers() {
     buildTimers.current.forEach(clearInterval);
@@ -432,8 +576,8 @@ export function ExpoBuildRoom({
 
   return (
     <div className={`flex min-h-0 w-full flex-col ${className}`}>
-      <div className="grid h-full min-h-0 w-full flex-1 grid-cols-1 xl:grid-cols-[minmax(300px,28vw)_1fr_minmax(280px,26vw)]">
-      <div className="chat-panel-surface flex min-h-0 flex-col border-b border-line/30 xl:border-b-0 xl:border-r">
+      <div className="grid h-full min-h-0 w-full flex-1 grid-cols-1 xl:grid-cols-[minmax(300px,28vw)_1fr_minmax(300px,24vw)] [&>*]:min-h-0">
+      <div className="chat-panel-surface flex min-h-0 flex-col overflow-hidden border-b border-line/30 xl:border-b-0 xl:border-r">
         <div className="relative z-10 flex shrink-0 items-start gap-3 overflow-visible border-b border-line/25 px-4 py-3 pb-4">
           <span className="relative grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-gradient-to-br from-coral to-coral-deep text-sm font-bold text-white shadow-[0_4px_14px_-2px_rgba(255,122,99,0.5)]">
             A
@@ -465,11 +609,11 @@ export function ExpoBuildRoom({
               key={b.id}
               className={
                 b.role === "ai"
-                  ? "max-w-[94%] rounded-2xl rounded-tl-md border border-line/30 bg-white/80 px-4 py-3 text-[13px] leading-relaxed text-charcoal shadow-[0_2px_14px_-6px_rgba(43,38,36,0.1)] backdrop-blur-sm"
-                  : "ml-auto max-w-[88%] rounded-2xl rounded-tr-md bg-gradient-to-br from-coral via-coral to-[#ff6b54] px-4 py-2.5 text-[13px] leading-relaxed text-white shadow-[0_6px_20px_-6px_rgba(255,122,99,0.55)]"
+                  ? "chat-bubble-ai max-w-[94%] rounded-2xl rounded-tl-md border border-line/30 bg-white/80 px-4 py-3 text-[13px] leading-relaxed text-charcoal shadow-[0_2px_14px_-6px_rgba(43,38,36,0.1)] backdrop-blur-sm"
+                  : "chat-bubble-user ml-auto max-w-[88%] rounded-2xl rounded-tr-md bg-gradient-to-br from-coral via-coral to-[#ff6b54] px-4 py-2.5 text-[13px] leading-relaxed text-white shadow-[0_6px_20px_-6px_rgba(255,122,99,0.55)]"
               }
             >
-              <ChecklistText text={b.text} />
+              <ChecklistText text={b.text} variant={b.role === "user" ? "user" : "ai"} />
             </div>
           ))}
           {phase === "building" && (
@@ -603,44 +747,21 @@ export function ExpoBuildRoom({
                   {fixMode ? "Done selecting" : "Tap to fix"}
                 </button>
               )}
-              {lastBrainstormPlan && chatMode === "brainstorm" && (
-                <button
-                  type="button"
-                  disabled={busy}
-                  onClick={() => {
-                    setChatMode("build");
-                    const idea = lastBrainstormPlan;
-                    setBusy(true);
-                    setBubbles((b) => [
-                      ...b,
-                      { id: `tu-${Date.now()}`, role: "user", text: `Build this: ${idea}` },
-                    ]);
-                    void expoTweakChat(projectId, idea)
-                      .then((res) => {
-                        if (res.ok) setAppModel(res.model);
-                        setBudgetKey((k) => k + 1);
-                        setBubbles((b) => [
-                          ...b,
-                          {
-                            id: `ta-${Date.now()}`,
-                            role: "ai",
-                            text: res.ok ? res.reply : res.message,
-                          },
-                        ]);
-                      })
-                      .finally(() => setBusy(false));
-                  }}
-                  className="inline-flex items-center gap-1 rounded-full bg-coral/10 px-2.5 py-1 text-[11px] font-semibold text-coral-deep hover:bg-coral/15"
-                >
-                  <Hammer className="h-3 w-3" />
-                  Build this idea
-                </button>
-              )}
             </div>
+
+            {chatMode === "brainstorm" && brainstormState.pendingBuild && (
+              <BrainstormBuildHandoff
+                suggestion={brainstormState.pendingBuild}
+                busy={busy}
+                onBuild={() => handoffToBuild(brainstormState.pendingBuild!.prompt)}
+              />
+            )}
 
             {readinessSuggestions.length > 0 && (
               <ReadinessSuggestionBar
                 suggestions={readinessSuggestions}
+                activeId={highlightedSuggestionId}
+                chatMode={chatMode}
                 onPick={pickReadinessSuggestion}
                 className="mb-2"
               />
@@ -665,37 +786,58 @@ export function ExpoBuildRoom({
               className="flex items-end gap-2 rounded-2xl border border-line/35 bg-white/95 p-1.5 shadow-[0_4px_20px_-8px_rgba(43,38,36,0.12),inset_0_1px_0_rgba(255,255,255,0.8)]"
               onSubmit={(e) => {
                 e.preventDefault();
-                if (!tweakInput.trim() || busy) return;
+                if (!tweakInput.trim() || busy || chatSubmittingRef.current) return;
                 const msg = tweakInput.trim();
                 const pinnedId = readinessState.pinnedItemId;
                 setTweakInput("");
                 setBusy(true);
-                setBubbles((b) => [...b, { id: `tu-${Date.now()}`, role: "user", text: msg }]);
+                chatSubmittingRef.current = true;
 
                 if (chatMode === "brainstorm") {
-                  void expoBrainstormChat(projectId, msg, brainstormHistory, pinnedId)
+                  setBubbles((b) => [
+                    ...b.filter((x) => x.id !== "bchat-pending-user"),
+                    {
+                      id: "bchat-pending-user",
+                      role: "user",
+                      text: msg,
+                      brainstormChat: true,
+                    },
+                  ]);
+                  void expoBrainstormChat(projectId, msg, pinnedId)
                     .then((res) => {
-                      const reply = res.ok ? res.reply : res.message;
-                      setBrainstormHistory((h) => [
-                        ...h,
-                        { role: "user", content: msg },
-                        { role: "assistant", content: reply },
-                      ]);
-                      if (res.ok) setLastBrainstormPlan(res.reply);
-                      setBubbles((b) => [
-                        ...b,
-                        {
-                          id: `ta-${Date.now()}`,
-                          role: "ai",
-                          text: reply,
-                          brainstorm: true,
-                        },
-                      ]);
-                      if (res.ok && pinnedId) markPinnedDiscussed(pinnedId);
+                      if (res.ok) {
+                        setBrainstormState(res.brainstormState);
+                        setBubbles((b) =>
+                          mergeBrainstormBubbles(b, res.brainstormState.history)
+                        );
+                        if (pinnedId) markPinnedDiscussed(pinnedId);
+                      } else {
+                        setBubbles((b) => [
+                          ...b,
+                          {
+                            id: `tu-${Date.now()}`,
+                            role: "user",
+                            text: msg,
+                            brainstormChat: true,
+                          },
+                          {
+                            id: `ta-${Date.now()}`,
+                            role: "ai",
+                            text: res.message,
+                            brainstorm: true,
+                            brainstormChat: true,
+                          },
+                        ]);
+                      }
                     })
-                    .finally(() => setBusy(false));
+                    .finally(() => {
+                      setBusy(false);
+                      chatSubmittingRef.current = false;
+                    });
                   return;
                 }
+
+                setBubbles((b) => [...b, { id: `tu-${Date.now()}`, role: "user", text: msg }]);
 
                 void expoTweakChat(projectId, msg)
                   .then((res) => {
@@ -710,19 +852,29 @@ export function ExpoBuildRoom({
                       },
                     ]);
                   })
-                  .finally(() => setBusy(false));
+                  .finally(() => {
+                    setBusy(false);
+                    chatSubmittingRef.current = false;
+                  });
               }}
             >
-              <input
+              <textarea
                 ref={chatInputRef}
                 value={tweakInput}
+                rows={1}
                 onChange={(e) => setTweakInput(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && !e.shiftKey) {
+                    e.preventDefault();
+                    e.currentTarget.form?.requestSubmit();
+                  }
+                }}
                 placeholder={
                   chatMode === "brainstorm"
                     ? "What should we add next?"
                     : "Describe a change to your app…"
                 }
-                className="min-w-0 flex-1 border-0 bg-transparent px-2.5 py-2 text-sm text-charcoal outline-none placeholder:text-warmgrey/80"
+                className="max-h-40 min-h-9 min-w-0 flex-1 resize-none overflow-y-auto border-0 bg-transparent px-2.5 py-2 text-sm leading-relaxed text-charcoal outline-none placeholder:text-warmgrey/80"
                 disabled={busy}
               />
               <button
@@ -737,7 +889,7 @@ export function ExpoBuildRoom({
         )}
       </div>
 
-      <div className="build-pane-mesh relative flex min-h-0 flex-col items-center justify-center overflow-visible border-b border-line/30 xl:border-b-0 xl:border-r">
+      <div className="build-pane-mesh relative flex min-h-0 flex-col items-center justify-center overflow-hidden border-b border-line/30 xl:border-b-0 xl:border-r">
         {showPreview && (
           <div className="absolute left-3 top-3 z-20 sm:left-4 sm:top-4">
             <PreviewCanvasPicker appName={plan.appName} />
@@ -812,22 +964,24 @@ export function ExpoBuildRoom({
         </div>
       </div>
 
-      <div className="chat-panel-surface hidden min-h-0 flex-col gap-3 overflow-y-auto p-4 xl:flex">
-        {readinessAudit && previewReady && (
-          <ReadinessChecklist
-            audit={readinessAudit}
-            chatMode={chatMode}
-            onAskAbout={askAboutReadiness}
-            onDecision={setReadinessDecision}
-          />
-        )}
-        <ExpoPhoneGuide
-          projectId={projectId}
-          previewToken={previewToken}
-          appName={plan.appName}
-          ready={previewReady}
-        />
-      </div>
+      <BuildSidePanel
+        projectId={projectId}
+        previewToken={previewToken}
+        appName={plan.appName}
+        previewReady={previewReady}
+        readinessAudit={readinessAudit}
+        supabaseConnector={supabaseConnector}
+        revenueCatConnector={revenueCatConnector}
+        railwayConnector={railwayConnector}
+        connectorNeeds={connectorNeeds}
+        onSupabaseConnectorChange={setSupabaseConnector}
+        onRevenueCatConnectorChange={setRevenueCatConnector}
+        onRailwayConnectorChange={setRailwayConnector}
+        connectorRecommendations={connectorRecommendations}
+        chatMode={chatMode}
+        onAskAbout={askAboutReadiness}
+        onDecision={setReadinessDecision}
+      />
       </div>
     </div>
   );
@@ -838,13 +992,21 @@ function formatChecklist(mp: MasterBuildPrompt): string {
   return lines.join("\n");
 }
 
-function ChecklistText({ text }: { text: string }) {
+function ChecklistText({
+  text,
+  variant = "ai",
+}: {
+  text: string;
+  variant?: "ai" | "user";
+}) {
   const parts = text.split(/(\*\*[^*]+\*\*)/g);
+  const strongClass =
+    variant === "user" ? "font-semibold text-white" : "font-semibold text-charcoal";
   return (
     <span className="whitespace-pre-wrap">
       {parts.map((part, i) =>
         part.startsWith("**") && part.endsWith("**") ? (
-          <strong key={i} className="font-semibold text-charcoal">
+          <strong key={i} className={strongClass}>
             {part.slice(2, -2)}
           </strong>
         ) : (

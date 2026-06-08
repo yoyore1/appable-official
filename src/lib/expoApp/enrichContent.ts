@@ -7,7 +7,7 @@ import { enrichOnboardingSlides } from "./enrichOnboarding";
 import {
   defaultProfileStats,
   defaultSettingsRows,
-  ensureLegalSettingsRows,
+  ensureRequiredProfileSettings,
 } from "./smartInteractions";
 import { buildAppBlueprint } from "./smartBlueprint";
 import type { InterviewTurn, MasterBuildPrompt } from "@/lib/types";
@@ -129,7 +129,7 @@ function personalizeCopy(
         input.profile.stats?.length >= 3
           ? input.profile.stats
           : defaultProfileStats(blueprint.category),
-      settings: ensureLegalSettingsRows(
+      settings: ensureRequiredProfileSettings(
         input.profile.settings?.length >= 4
           ? input.profile.settings
           : defaultSettingsRows(blueprint.category)

@@ -2,7 +2,8 @@ import { inferCategory, type AppCategory } from "./inferCategory";
 import { buildPreviewUiConfigFromModel } from "./previewFeatures";
 import type { ExpoAppModel, ExpoIconName, ExpoListItem } from "./types";
 
-export type SettingsKind = "toggle" | "legal" | "info";
+export type SettingsKind = "toggle" | "legal" | "info" | "account";
+export type AccountSettingAction = "sign_out" | "delete_account";
 export type HeroMode = "vision_scan" | "open_content" | "goto_tab" | "quick_capture";
 export type CollectionExtract = "ingredients" | "steps" | "body" | "title";
 
@@ -10,6 +11,7 @@ export interface SettingBinding {
   kind: SettingsKind;
   description: string;
   legalDoc?: "privacy" | "terms" | "support";
+  accountAction?: AccountSettingAction;
   toggleDefault: boolean;
 }
 
@@ -51,8 +53,34 @@ function blobFromModel(model: ExpoAppModel): string {
     .toLowerCase();
 }
 
+export function isSignOutSettingLabel(label: string): boolean {
+  return /sign[\s-]?out|log[\s-]?out/.test(label.toLowerCase());
+}
+
+export function isDeleteAccountSettingLabel(label: string): boolean {
+  return /delete\s+(my\s+)?account|remove\s+account/.test(label.toLowerCase());
+}
+
+export function modelHasAccountControls(model: ExpoAppModel): {
+  signOut: boolean;
+  deleteAccount: boolean;
+} {
+  const labels = model.profile.settings.map((s) => s.label);
+  return {
+    signOut: labels.some(isSignOutSettingLabel),
+    deleteAccount: labels.some(isDeleteAccountSettingLabel),
+  };
+}
+
+function accountActionForSetting(label: string): AccountSettingAction | undefined {
+  if (isSignOutSettingLabel(label)) return "sign_out";
+  if (isDeleteAccountSettingLabel(label)) return "delete_account";
+  return undefined;
+}
+
 function settingsKind(label: string): SettingsKind {
   const l = label.toLowerCase();
+  if (accountActionForSetting(label)) return "account";
   if (/privacy|terms|legal|help|support|faq/.test(l)) return "legal";
   if (
     /notification|reminder|preference|theme|dietary|spice|portion|goal|level|connected|unit|display|alert/.test(
@@ -93,8 +121,33 @@ export function ensureLegalSettingsRows(
   return appended.length ? [...settings, ...appended] : settings;
 }
 
+/** Sign out + delete account — required on every app after the first build. */
+export const REQUIRED_ACCOUNT_SETTINGS: { label: string; icon: ExpoIconName }[] = [
+  { label: "Sign out", icon: "user" },
+  { label: "Delete account", icon: "shield" },
+];
+
+export function ensureAccountSettingsRows(
+  settings: { label: string; icon: ExpoIconName }[]
+): { label: string; icon: ExpoIconName }[] {
+  let next = [...settings];
+  if (!next.some((r) => isSignOutSettingLabel(r.label))) {
+    next = [...next, REQUIRED_ACCOUNT_SETTINGS[0]];
+  }
+  if (!next.some((r) => isDeleteAccountSettingLabel(r.label))) {
+    next = [...next, REQUIRED_ACCOUNT_SETTINGS[1]];
+  }
+  return next;
+}
+
+export function ensureRequiredProfileSettings(
+  settings: { label: string; icon: ExpoIconName }[]
+): { label: string; icon: ExpoIconName }[] {
+  return ensureAccountSettingsRows(ensureLegalSettingsRows(settings));
+}
+
 export function withLegalSettings<T extends ExpoAppModel>(model: T): T {
-  const settings = ensureLegalSettingsRows(model.profile.settings ?? []);
+  const settings = ensureRequiredProfileSettings(model.profile.settings ?? []);
   const same =
     settings.length === model.profile.settings.length &&
     settings.every((s, i) => s.label === model.profile.settings[i]?.label);
@@ -333,6 +386,12 @@ function describeSetting(
   if (/help|support|faq/.test(l)) {
     return `Help, FAQ, and contact for ${app}. Hosted by Appable.`;
   }
+  if (isSignOutSettingLabel(label)) {
+    return `End your session on this device. Required in every app — Apple expects an easy way to sign out.`;
+  }
+  if (isDeleteAccountSettingLabel(label)) {
+    return `Permanently remove your account and data. Required before App Store review when accounts exist.`;
+  }
   if (/account|profile|user/.test(l)) {
     return `Your ${app} profile on this device. Cloud sync in the published app.`;
   }
@@ -390,6 +449,7 @@ export function buildPreviewInteractionConfig(
       kind: settingsKind(row.label),
       description: describeSetting(row.label, model, category),
       legalDoc: legalDocForSetting(row.label),
+      accountAction: accountActionForSetting(row.label),
       toggleDefault: true,
     };
   }

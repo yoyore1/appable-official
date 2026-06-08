@@ -75,7 +75,12 @@ export async function flashChatComplete(
     max_tokens: maxTokens,
   };
 
-  try {
+  if (qwen) {
+    // Qwen 3.x on DeepInfra can burn the token budget on "thinking" and return empty content.
+    body.chat_template_kwargs = { enable_thinking: false };
+  }
+
+  async function call(payload: Record<string, unknown>): Promise<AiChatResult> {
     const res = await fetch(url, {
       method: "POST",
       signal: controller.signal,
@@ -83,7 +88,7 @@ export async function flashChatComplete(
         "Content-Type": "application/json",
         Authorization: `Bearer ${chatModel.key}`,
       },
-      body: JSON.stringify(body),
+      body: JSON.stringify(payload),
     });
 
     if (!res.ok) {
@@ -98,7 +103,27 @@ export async function flashChatComplete(
     const data = await res.json();
     const costUsd = parseDeepInfraCost(data);
     trackLlmCost(costUsd);
-    return { text: extractAssistantText(data), costUsd };
+    const text = extractAssistantText(data);
+    if (!text) {
+      const finish = (
+        data as { choices?: Array<{ finish_reason?: string }> }
+      )?.choices?.[0]?.finish_reason;
+      console.error(
+        `[flashChatComplete] empty content model=${chatModel.name} finish=${finish}`
+      );
+    }
+    return { text, costUsd };
+  }
+
+  try {
+    let result = await call(body);
+    if (!result.text && qwen) {
+      result = await call({
+        ...body,
+        max_tokens: Math.max(maxTokens, 768),
+      });
+    }
+    return result;
   } catch (err) {
     console.error("[flashChatComplete] failed:", err);
     return { text: "", costUsd: 0 };

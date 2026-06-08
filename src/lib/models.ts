@@ -4,7 +4,8 @@
  * the product is fully clickable with no API keys.
  *
  * - chat model (Step 3.5) → ASO copy, tweak chat
- * - plan model (Kimi K2.6) → interview acks, suggestions, master-prompt synthesis
+ * - chat model (Qwen 3.6) → interview acks, suggestion pills, brainstorm coach
+ * - plan model (Kimi K2.6) → master-prompt synthesis
  * - image model           → launch-pack screenshots + icon
  * - video model           → launch-pack video ad specs (stub)
  */
@@ -15,6 +16,7 @@ import {
   interviewAiRecommend,
   interviewAiSuggestions,
   isGenericInterviewAck,
+  minimalAckFromAnswer,
 } from "@/lib/interviewAi";
 import {
   inferArchetypeFromInterview,
@@ -594,12 +596,34 @@ export async function interviewAck(
   return ackForAppablePick(prevAnswer, questionId, priorInterview);
 }
 
-/** One-line echo after Let Appable pick — not a filler ack before every question. */
-export function ackForAppablePick(
+/** One-line echo after Let Appable pick — Qwen first, templates only if API is down. */
+export async function ackForAppablePick(
   resolvedAnswer: string,
   questionId: string,
   priorInterview: InterviewTurn[] = []
-): string[] {
+): Promise<string[]> {
+  if (interviewLlmReady()) {
+    let ack = await interviewAiAck(
+      resolvedAnswer,
+      questionId,
+      priorInterview,
+      false
+    );
+    if (!ack || isGenericInterviewAck(ack)) {
+      ack = await interviewAiAck(
+        resolvedAnswer,
+        questionId,
+        priorInterview,
+        true
+      );
+    }
+    if (ack && !isGenericInterviewAck(ack)) {
+      return [ack];
+    }
+    const minimal = minimalAckFromAnswer(resolvedAnswer).trim();
+    if (minimal) return [minimal];
+  }
+
   const line = warmFromAnswer(questionId, resolvedAnswer, priorInterview).trim();
   return line ? [line] : [];
 }
@@ -623,11 +647,18 @@ export async function interviewResolvePick(
   interview: InterviewTurn[]
 ): Promise<string> {
   if (interviewLlmReady()) {
-    const picked = await interviewAiRecommend(stepId, stepPrompt, interview);
+    let picked = await interviewAiRecommend(stepId, stepPrompt, interview);
+    if (!picked) {
+      picked = await interviewAiRecommend(stepId, stepPrompt, interview);
+    }
     if (picked) return picked;
   }
   const { resolveInterviewAnswer } = await import("@/lib/interviewSuggestions");
-  return resolveInterviewAnswer(stepId as import("@/lib/interviewFlow").InterviewStepId, APPABLE_PICK, interview);
+  return resolveInterviewAnswer(
+    stepId as import("@/lib/interviewFlow").InterviewStepId,
+    APPABLE_PICK,
+    interview
+  );
 }
 
 /**

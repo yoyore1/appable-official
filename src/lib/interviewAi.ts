@@ -1,7 +1,8 @@
 /**
  * Interview acks, engineer pool picks, clarify prompts, and suggestion pills — Qwen via CHAT_MODEL.
- * No category templates; idea-tailored fallback if LLM fails.
+ * Local templates only when the API is unavailable or Qwen fails after retries.
  */
+import { integrations } from "@/lib/config";
 import { answerFor } from "@/lib/interviewHelpers";
 import { flashChatComplete } from "@/lib/flashChat";
 import type { AiChatResult } from "@/lib/deepinfraCost";
@@ -406,12 +407,77 @@ async function suggestOnce(
   return normalizePills(parseSuggestionLines(raw));
 }
 
+function finalizeSuggestionPills(items: string[]): string[] {
+  if (items.length === 0) return [APPABLE_PICK];
+  if (items.length === 1) return [items[0], APPABLE_PICK];
+  return [...items.slice(0, 3), APPABLE_PICK];
+}
+
+/** Local pills — only when Qwen is down or every retry failed. */
+function localSuggestionFallback(
+  stepId: InterviewStepId,
+  interview: InterviewTurn[]
+): string[] {
+  const fallback = fallbackSuggestionsForStep(stepId, interview);
+  const nonPick = fallback.filter((s) => s !== APPABLE_PICK);
+  if (nonPick.length >= 2) return fallback;
+  const tailored = ideaTailoredSuggestions(stepId, interview);
+  const tailoredNonPick = tailored?.filter((s) => s !== APPABLE_PICK) ?? [];
+  if (tailoredNonPick.length >= 2) {
+    return [...tailoredNonPick.slice(0, 3), APPABLE_PICK];
+  }
+  return [APPABLE_PICK];
+}
+
+async function suggestJsonRetry(
+  stepId: string,
+  stepPrompt: string,
+  interview: InterviewTurn[],
+  idea: string,
+  strict: boolean
+): Promise<string[]> {
+  const { text: raw } = await interviewChatComplete(
+    [
+      {
+        role: "system",
+        content:
+          'Return JSON only: { "suggestions": ["...", "...", "..."] }. ' +
+          "Each answer must match their specific app idea. Max 12 words each. " +
+          (strict
+            ? "Reuse exact nouns from appIdea — no generic marketplace copy."
+            : ""),
+      },
+      {
+        role: "user",
+        content: JSON.stringify({
+          stepId,
+          question: stepPrompt,
+          appIdea: idea,
+          interview: transcript(interview),
+        }),
+      },
+    ],
+    {
+      temperature: strict ? 0.25 : 0.35,
+      maxTokens: strict ? 400 : 320,
+      timeoutMs: 45_000,
+    }
+  );
+  const parsed = parseJsonFromText<{ suggestions?: string[] }>(raw);
+  return normalizePills(parsed?.suggestions ?? []);
+}
+
 export async function interviewAiSuggestions(
   stepId: string,
   stepPrompt: string,
   interview: InterviewTurn[]
 ): Promise<string[]> {
   const idea = answerFor(interview, "idea");
+  const typedStep = stepId as InterviewStepId;
+
+  if (!integrations.chatModel) {
+    return localSuggestionFallback(typedStep, interview);
+  }
 
   let items = await suggestOnce(stepId, stepPrompt, interview, false);
 
@@ -420,48 +486,18 @@ export async function interviewAiSuggestions(
   }
 
   if (items.length < 2 || !suggestionsValidForStep(items, stepId, idea)) {
-    const { text: raw } = await interviewChatComplete(
-      [
-        {
-          role: "system",
-          content:
-            'Return JSON only: { "suggestions": ["...", "...", "..."] }. ' +
-            "Each answer must match their specific app idea. Max 12 words each.",
-        },
-        {
-          role: "user",
-          content: JSON.stringify({
-            stepId,
-            question: stepPrompt,
-            appIdea: idea,
-            interview: transcript(interview),
-          }),
-        },
-      ],
-      { temperature: 0.35, maxTokens: 320, timeoutMs: 20_000 }
-    );
-    const parsed = parseJsonFromText<{ suggestions?: string[] }>(raw);
-    items = normalizePills(parsed?.suggestions ?? []);
+    items = await suggestJsonRetry(stepId, stepPrompt, interview, idea, false);
   }
 
-  const tailored = ideaTailoredSuggestions(stepId as InterviewStepId, interview);
-  if (tailored?.length) {
-    const pills = tailored.filter((s) => s !== APPABLE_PICK).slice(0, 3);
-    if (pills.length >= 2) {
-      return [...pills, APPABLE_PICK];
-    }
+  if (items.length < 2 || !suggestionsValidForStep(items, stepId, idea)) {
+    items = await suggestJsonRetry(stepId, stepPrompt, interview, idea, true);
   }
 
-  if (!suggestionsValidForStep(items, stepId, idea)) {
-    const fallback = fallbackSuggestionsForStep(stepId as InterviewStepId, interview);
-    const nonPick = fallback.filter((s) => s !== APPABLE_PICK);
-    if (nonPick.length >= 2) return fallback;
-    return [APPABLE_PICK];
+  if (items.length >= 2 && suggestionsValidForStep(items, stepId, idea)) {
+    return finalizeSuggestionPills(items);
   }
 
-  if (items.length === 0) return tailored?.length ? [...tailored.filter((s) => s !== APPABLE_PICK).slice(0, 3), APPABLE_PICK] : [APPABLE_PICK];
-  if (items.length === 1) return [items[0], APPABLE_PICK];
-  return [...items.slice(0, 3), APPABLE_PICK];
+  return localSuggestionFallback(typedStep, interview);
 }
 
 /** App engineer pass: Qwen picks 0–2 questions from the curated pool (no monetization). */
@@ -477,8 +513,9 @@ export async function interviewAiPickPoolPlan(
 
   const idea = answerFor(interview, "idea");
 
-  let text = "";
-  try {
+  if (!integrations.chatModel) return sync;
+
+  async function pickOnce(strict: boolean): Promise<string> {
     const res = await interviewChatComplete(
       [
         {
@@ -487,7 +524,8 @@ export async function interviewAiPickPoolPlan(
             'Return JSON only: { "pick": ["pool_who"|"pool_core_loop"|"pool_rules"|"pool_proof"|"pool_first_use"] }. ' +
             "Pick 0–2 ids from eligible ONLY. Skip what the idea already answers. Never monetization. " +
             "pool_first_use if vague. pool_who if audience unclear. pool_core_loop if flow unclear. " +
-            "pool_rules/pool_proof for photo-alarm-verify apps missing constraints.",
+            "pool_rules/pool_proof for photo-alarm-verify apps missing constraints." +
+            (strict ? " JSON only — no commentary." : ""),
         },
         {
           role: "user",
@@ -498,9 +536,19 @@ export async function interviewAiPickPoolPlan(
           }),
         },
       ],
-      { temperature: 0.25, maxTokens: 220, timeoutMs: 30_000 }
+      {
+        temperature: strict ? 0.15 : 0.25,
+        maxTokens: 220,
+        timeoutMs: 45_000,
+      }
     );
-    text = res.text;
+    return res.text;
+  }
+
+  let text = "";
+  try {
+    text = await pickOnce(false);
+    if (!text.trim()) text = await pickOnce(true);
   } catch {
     return sync;
   }
@@ -521,33 +569,46 @@ export async function interviewAiClarifyPrompt(
   const ruleBased = clarifyPromptForAnchor(anchor, interview);
   const idea = answerFor(interview, "idea");
 
-  const { text } = await interviewChatComplete(
-    [
-      {
-        role: "system",
-        content:
-          "You help design an app. Return JSON only: { \"question\": \"...\" }. " +
-          "ONE short clarifying question (max 22 words) in plain friend-texting tone. " +
-          "Reference their specific nouns (alarm, photo, sun, dog, etc.). " +
-          "Do NOT ask a generic 'who is it for' unless anchor is audience. " +
-          "Do NOT suggest features they already stated.",
-      },
-      {
-        role: "user",
-        content: JSON.stringify({
-          anchor,
-          appIdea: idea,
-          interview: transcript(interview),
-          fallbackQuestion: ruleBased,
-        }),
-      },
-    ],
-    { temperature: 0.4, maxTokens: 180, timeoutMs: 25_000 }
-  );
+  if (!integrations.chatModel) return ruleBased;
 
-  const parsed = parseJsonFromText<{ question?: string }>(text);
-  const q = parsed?.question?.trim();
-  if (q && q.length >= 12 && q.length < 160) return q;
+  async function clarifyOnce(strict: boolean): Promise<string | null> {
+    const { text } = await interviewChatComplete(
+      [
+        {
+          role: "system",
+          content:
+            'Return JSON only: { "question": "..." }. ' +
+            "ONE short clarifying question (max 22 words) in plain friend-texting tone. " +
+            "Reference their specific nouns (alarm, photo, sun, dog, etc.). " +
+            "Do NOT ask a generic 'who is it for' unless anchor is audience. " +
+            "Do NOT suggest features they already stated." +
+            (strict ? " Use words from appIdea — no generic interview copy." : ""),
+        },
+        {
+          role: "user",
+          content: JSON.stringify({
+            anchor,
+            appIdea: idea,
+            interview: transcript(interview),
+          }),
+        },
+      ],
+      {
+        temperature: strict ? 0.3 : 0.4,
+        maxTokens: 180,
+        timeoutMs: 45_000,
+      }
+    );
+    const parsed = parseJsonFromText<{ question?: string }>(text);
+    const q = parsed?.question?.trim();
+    if (q && q.length >= 12 && q.length < 160) return q;
+    return null;
+  }
+
+  const first = await clarifyOnce(false);
+  if (first) return first;
+  const second = await clarifyOnce(true);
+  if (second) return second;
   return ruleBased;
 }
 

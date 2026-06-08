@@ -44,7 +44,13 @@ import {
 import { ensureRepoForApp } from "@/lib/github";
 import { builderDeepLink, handoffFallbackUrl } from "@/lib/handoff";
 import { applyExpoTweak } from "@/lib/expoApp/applyTweak";
-import { runBrainstormChat, type BrainstormTurn } from "@/lib/expoApp/brainstormChat";
+import {
+  appendBrainstormTurn,
+  defaultBrainstormState,
+  formatBrainstormContextForBuild,
+  summarizeReadinessForBuild,
+} from "@/lib/expoApp/brainstormContext";
+import { runBrainstormChat } from "@/lib/expoApp/brainstormChat";
 import {
   applySelectionTweak,
   type SelectionTweakAction,
@@ -226,7 +232,7 @@ export async function answerInterview(
       ) {
         acks = [recommendColorsAck(interview)];
       } else if (isAppablePick(raw)) {
-        acks = ackForAppablePick(normalized, questionId, interview);
+        acks = await ackForAppablePick(normalized, questionId, interview);
       }
 
       let nextChoices:
@@ -430,30 +436,49 @@ export async function runExpoWebBuild(
   return { model, passes };
 }
 
-/** Post-build brainstorm — cheap model, no preview changes, no AI cap. */
+/** Post-build brainstorm — Qwen only, no preview changes, no AI cap. */
 export async function expoBrainstormChat(
   projectId: string,
   message: string,
-  history: BrainstormTurn[] = [],
   pinnedItemId?: string | null
-): Promise<{ ok: true; reply: string } | { ok: false; message: string }> {
+): Promise<
+  | {
+      ok: true;
+      reply: string;
+      buildSuggestion: import("@/lib/types").BrainstormBuildSuggestion | null;
+      brainstormState: import("@/lib/types").ProjectBrainstormState;
+    }
+  | { ok: false; message: string }
+> {
   const user = await requireUser();
   const project = await db.getProject(projectId);
   if (!project || project.userId !== user.id) throw new Error("NOT_FOUND");
   if (!project.masterPrompt) throw new Error("NO_PROMPT");
 
   try {
-    const model = project.expoAppModel ?? null;
+    const previewModel = project.expoAppModel ?? null;
     const interview = project.interview ?? [];
+    const prior = project.brainstormState ?? defaultBrainstormState();
     const { auditAppReadiness, enrichAuditWithState } = await import(
       "@/lib/expoApp/readinessAudit"
     );
+    const { applyConnectorsToAudit } = await import("@/lib/connectors/readinessConnector");
+    const { enrichOAuthSetupStatus } = await import("@/lib/expoApp/oauthReadiness");
     const audit =
-      model != null
-        ? enrichAuditWithState(
-            auditAppReadiness(model, project.masterPrompt, interview),
-            project.readinessState,
-            pinnedItemId
+      previewModel != null
+        ? enrichOAuthSetupStatus(
+            applyConnectorsToAudit(
+              enrichAuditWithState(
+                auditAppReadiness(previewModel, project.masterPrompt, interview),
+                project.readinessState,
+                pinnedItemId
+              ),
+              project.supabaseConnector?.public,
+              project.revenueCatConnector?.public,
+              project.railwayConnector?.public
+            ),
+            Boolean(previewModel.flow?.auth?.enabled),
+            project.readinessState
           )
         : null;
     const pinnedItem =
@@ -461,16 +486,73 @@ export async function expoBrainstormChat(
         ? audit.items.find((i) => i.id === pinnedItemId) ?? null
         : null;
 
-    const reply = await runBrainstormChat(project.masterPrompt, history, message, {
-      model,
-      interview,
-      audit,
-      pinnedItem,
-    });
-    return { ok: true, reply };
+    const {
+      formatConnectorContextForCoach,
+      inferConnectorNeeds,
+      mergeConnectorNeeds,
+      projectConnectorState,
+    } = await import("@/lib/connectors/registry");
+    const connectorState = projectConnectorState(project);
+    const connectorNeeds = mergeConnectorNeeds(
+      inferConnectorNeeds({
+        mp: project.masterPrompt,
+        interview,
+        audit,
+      }),
+      message
+    );
+    const connectorNote = formatConnectorContextForCoach(
+      connectorState,
+      connectorNeeds,
+      audit
+    );
+
+    const result = await runBrainstormChat(
+      project.masterPrompt,
+      prior.history,
+      message,
+      {
+        model: previewModel,
+        interview,
+        audit,
+        pinnedItem,
+        existingSummary: prior.summary,
+        connectorNote,
+      }
+    );
+
+    const brainstormState = {
+      ...appendBrainstormTurn(prior, message, result.reply),
+      summary: result.summary,
+      pendingBuild: result.buildSuggestion ?? prior.pendingBuild ?? null,
+    };
+
+    await db.updateProject(projectId, { brainstormState });
+
+    return {
+      ok: true,
+      reply: result.reply,
+      buildSuggestion: brainstormState.pendingBuild ?? null,
+      brainstormState,
+    };
   } catch {
     return { ok: false, message: "Brainstorm hit a snag — try again." };
   }
+}
+
+/** Clear pending build handoff after user switches to Build. */
+export async function clearBrainstormBuildSuggestion(
+  projectId: string
+): Promise<{ ok: true; brainstormState: import("@/lib/types").ProjectBrainstormState }> {
+  const user = await requireUser();
+  const project = await db.getProject(projectId);
+  if (!project || project.userId !== user.id) throw new Error("NOT_FOUND");
+
+  const prior = project.brainstormState ?? defaultBrainstormState();
+  const brainstormState = { ...prior, pendingBuild: null };
+  await db.updateProject(projectId, { brainstormState });
+  revalidatePath(`/project/${projectId}/expo`);
+  return { ok: true, brainstormState };
 }
 
 /** Persist launch-checklist progress (discussed / yes / later / skip). */
@@ -532,9 +614,45 @@ export async function expoTweakChat(
     };
   }
 
+  const { auditAppReadiness } = await import("@/lib/expoApp/readinessAudit");
+  const audit = auditAppReadiness(
+    project.expoAppModel!,
+    mp,
+    project.interview ?? []
+  );
+  const readinessNote = summarizeReadinessForBuild(
+    audit.items,
+    project.readinessState
+  );
+  const {
+    formatConnectorContextForCoach,
+    inferConnectorNeeds,
+    mergeConnectorNeeds,
+    projectConnectorState,
+  } = await import("@/lib/connectors/registry");
+  const connectorState = projectConnectorState(project);
+  const connectorNeeds = mergeConnectorNeeds(
+    inferConnectorNeeds({
+      mp,
+      interview: project.interview ?? [],
+      audit,
+    }),
+    message
+  );
+  const brainstormContext = formatBrainstormContextForBuild(
+    project.brainstormState,
+    readinessNote,
+    formatConnectorContextForCoach(connectorState, connectorNeeds, audit)
+  );
+
   const { result, charge } = await runWithAiBilling(
     billingScope(project, false),
-    () => applyExpoTweak(project.expoAppModel!, mp, message)
+    () =>
+      applyExpoTweak(project.expoAppModel!, mp, message, {
+        brainstormContext,
+        connectorState,
+        connectorNeeds,
+      })
   );
   if (!charge.ok) {
     return {

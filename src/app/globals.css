@@ -54,6 +54,20 @@
   ::selection {
     background: rgb(var(--coral) / 0.25);
   }
+
+  /* User chat bubbles: white on coral — default ::selection is nearly invisible */
+  .chat-bubble-user {
+    @apply select-text;
+  }
+  .chat-bubble-user::selection,
+  .chat-bubble-user *::selection {
+    background: rgb(255 255 255 / 0.92);
+    color: rgb(var(--charcoal));
+  }
+
+  .chat-bubble-ai {
+    @apply select-text;
+  }
 }
 
 @layer components {

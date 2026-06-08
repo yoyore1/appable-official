@@ -3,6 +3,7 @@
 import { useFormState, useFormStatus } from "react-dom";
 import Link from "next/link";
 import { AlertCircle } from "lucide-react";
+import { GoogleLogo } from "@/components/OAuthBrandIcons";
 import {
   googleAuthAction,
   signInAction,
@@ -32,10 +33,8 @@ export function AuthForm({
   return (
     <div className="space-y-4">
       <form action={googleAuthAction}>
-        <button className="btn-secondary w-full">
-          <svg className="h-4 w-4" viewBox="0 0 24 24" aria-hidden>
-            <path fill="#EA4335" d="M12 10.2v3.9h5.5c-.24 1.4-1.7 4.1-5.5 4.1A6.2 6.2 0 0 1 12 5.7c1.8 0 3 .76 3.7 1.4l2.5-2.4A9.6 9.6 0 0 0 12 2a10 10 0 1 0 0 20c5.8 0 9.6-4 9.6-9.7 0-.65-.07-1.14-.16-1.6Z" />
-          </svg>
+        <button className="btn-secondary w-full gap-2">
+          <GoogleLogo className="h-4 w-4" />
           Continue with Google
         </button>
       </form>

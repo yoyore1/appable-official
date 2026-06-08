@@ -164,7 +164,7 @@ QUALITY BAR (mandatory):
 - tabs: 4 tabs — use ids/icons from blueprint (home, search, bell, user, list, heart, book-open, shopping-cart, settings, shield, help-circle).
 - home: headline, subheadline, heroLabel, heroSublabel, sections[] with title + items[].
 - tabScreens: keyed by tab id (not home/profile) with title, subtitle, items[] (4+ unique items).
-- profile: displayName, tagline, stats[3], settings[4+] — domain-appropriate labels.
+- profile: displayName, tagline, stats[3], settings[4+] — domain-appropriate labels, then always end with "Sign out" and "Delete account".
 - Set "category" field to "${category}".
 
 FLOW SCHEMA (when dual-sided / marketplace):
@@ -192,7 +192,8 @@ ${category === "cooking" ? '- Recipes also need "ingredients": ["qty + item", ..
 
 IMPLICIT UI (preview wires these — include affordances in copy):
 - save/favorite on detail cards; collection action when blueprint has collectionTabId
-- profile settings rows are real and tappable
+- profile settings rows are real and tappable — must include Sign out and Delete account (App Store requirement)
+- when auth exists: show Continue with Google and Continue with Apple above email (recommended for launch)
 - primaryAction on list items — each button gets a preview outcome (compose, status change, navigate, open detail). A separate pass reviews previewActions; still use domain-appropriate labels.
 
 PREVIEW ACTIONS SCHEMA (optional in draft — refined in wiring pass):

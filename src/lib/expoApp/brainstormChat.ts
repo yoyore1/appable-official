@@ -1,65 +1,175 @@
 import { flashChatComplete } from "@/lib/flashChat";
-import type { InterviewTurn, MasterBuildPrompt } from "@/lib/types";
-import type { ReadinessItem } from "./readinessAudit";
+import type {
+  BrainstormBuildSuggestion,
+  BrainstormTurn,
+  InterviewTurn,
+  MasterBuildPrompt,
+} from "@/lib/types";
+import { isDeepBrainstormMessage, parseBuildSuggestionJson } from "./brainstormContext";
 import {
-  auditAppReadiness,
-  summarizeAuditForBrainstorm,
-  summarizeModelForBrainstorm,
-  type AppReadinessAudit,
-} from "./readinessAudit";
+  composeOfflineCoachReply,
+  formatRetrievedContextForPrompt,
+  isGenericBrainstormReply,
+  retrieveBrainstormContext,
+} from "./brainstormRetrieve";
+import { isBackendBuildRequest } from "./applyTweak";
+import type { ReadinessItem } from "./readinessAudit";
+import { auditAppReadiness, type AppReadinessAudit } from "./readinessAudit";
 import type { ExpoAppModel } from "./types";
 
-export type BrainstormTurn = { role: "user" | "assistant"; content: string };
+export type { BrainstormTurn } from "@/lib/types";
 
-function systemPrompt(
-  mp: MasterBuildPrompt,
-  model: ExpoAppModel | null,
-  audit: AppReadinessAudit | null,
-  interview: InterviewTurn[],
-  pinnedItem?: ReadinessItem | null
-): string {
-  const base =
-    `You are Appable's app engineer for "${mp.appName}" — a ${mp.description} app for ${mp.audience}. ` +
-    `Features in the plan: ${mp.features.slice(0, 8).join(", ") || "core flows"}. `;
+export interface BrainstormChatResult {
+  reply: string;
+  buildSuggestion: BrainstormBuildSuggestion | null;
+  summary: string;
+}
 
-  const engineer =
-    "Brainstorm mode: you have reviewed their preview and a readiness audit. " +
-    "Explain what they HAVE vs what is MISSING to ship a real app (accounts, database, payments, legal, landing page). " +
-    "Distinguish 'looks real in preview' from 'works in production'. " +
-    "Use plain language — no jargon without a one-line explanation (e.g. Supabase = where data is stored). " +
-    "Prioritize launch blockers before nice-to-haves. " +
-    "NEVER say you changed the app or wrote code — suggest switching to Build mode for preview tweaks. " +
-    "Keep replies under 140 words unless they ask for a full walkthrough. Friendly and specific to THIS app.";
+const COACH_VOICE =
+  "You are a senior mobile engineer brainstorming with a non-technical founder. " +
+  "Warm, direct, opinionated — but no catchphrase crutches. " +
+  "NEVER open with 'Oh I get it', 'Here's the thing', or similar filler — jump straight into the answer. " +
+  "Vary how you start each reply; don't repeat the same opener twice in a row. " +
+  "You NEVER changed their app. You NEVER dump full checklists or status reports. " +
+  "You answer exactly what they asked, using only the retrieved context below. " +
+  "You CANNOT see their phone or live preview — never say 'you're looking at', 'you see', " +
+  "'those slides on your screen', or anything that implies a shared viewport. " +
+  "Talk about what the **app design** includes vs what still needs real wiring. " +
+  "Plain English — define jargon in one line. " +
+  "Follow **CONNECTOR ROUTING** in context — only suggest connectors the app actually needs. " +
+  "Preview UI → **Build**. Accounts/data → **Supabase** in Connections, then Build wires sign-up. " +
+  "Paid features → **RevenueCat** after Supabase. Do not suggest RevenueCat for free apps. " +
+  "Google + Apple sign-in guides live under Connections. Never paste API keys in chat.";
 
-  if (!model || !audit) {
-    return (
-      base +
-      engineer +
-      " (No preview model yet — focus on plan and category best practices.)"
-    );
+const TIRED_OPENER_RE =
+  /^(oh,?\s*i get it|here'?s the thing|yeah,?\s*i get it|got it,?)\b/i;
+
+function tiredOpenersFromHistory(history: BrainstormTurn[]): string {
+  const recent = history.filter((t) => t.role === "assistant").slice(-4);
+  const used: string[] = [];
+  for (const t of recent) {
+    const head = t.content.trim().slice(0, 48);
+    if (TIRED_OPENER_RE.test(head)) used.push(head.split(/[.!?\n]/)[0] ?? head);
   }
-
+  if (used.length === 0) return "";
   return (
-    base +
-    engineer +
-    "\n\n" +
-    summarizeModelForBrainstorm(model) +
-    "\n\n" +
-    summarizeAuditForBrainstorm(audit) +
-    (interview.length
-      ? `\nInterview notes: ${interview
-          .slice(-4)
-          .map((t) => `${t.question} → ${t.answer}`)
-          .join(" | ")}`
-      : "") +
-    (pinnedItem
-      ? `\n\nUSER IS FOCUSED ON CHECKLIST ITEM: "${pinnedItem.title}" — ${pinnedItem.plainWhy} ` +
-        `Answer mainly about this. If they say yes/later/skip, acknowledge their decision briefly.`
-      : "")
+    "Recent replies already opened with filler (" +
+    used.slice(0, 2).join("; ") +
+    "). Start this reply with substance — no 'Oh I get it' / 'Here's the thing'."
   );
 }
 
-/** Cheap conversational brainstorm — no preview/code changes. */
+function stripTiredOpeners(text: string): string {
+  let t = text.trim();
+  for (let i = 0; i < 2; i++) {
+    const next = t
+      .replace(/^oh,?\s*i get it[.!—–-]*\s*/i, "")
+      .replace(/^here'?s the thing[.:!—–-]*\s*/i, "")
+      .replace(/^(yeah|got it),?\s*i get it[.!—–-]*\s*/i, "")
+      .trim();
+    if (next === t) break;
+    t = next;
+  }
+  return t;
+}
+
+function buildSystemPrompt(
+  mp: MasterBuildPrompt,
+  retrievedContext: string,
+  history: BrainstormTurn[]
+): string {
+  const openerHint = tiredOpenersFromHistory(history);
+  return (
+    `${COACH_VOICE}\n\n` +
+    `App: ${mp.appName}\n\n` +
+    retrievedContext +
+    (openerHint ? `\n\n--- Opener rule ---\n${openerHint}` : "")
+  );
+}
+
+function buildMessages(
+  system: string,
+  history: BrainstormTurn[],
+  userMessage: string
+): { role: "system" | "user" | "assistant"; content: string }[] {
+  return [
+    { role: "system", content: system },
+    ...history.slice(-8).map((t) => ({
+      role: t.role,
+      content: t.content,
+    })),
+    { role: "user", content: userMessage },
+  ];
+}
+
+async function coachReply(
+  messages: { role: "system" | "user" | "assistant"; content: string }[],
+  longForm: boolean
+): Promise<string> {
+  const { text } = await flashChatComplete(messages, {
+    temperature: 0.78,
+    maxTokens: longForm ? 650 : 450,
+    timeoutMs: longForm ? 40_000 : 30_000,
+  });
+  return text.trim();
+}
+
+async function refreshBrainstormSummary(
+  mp: MasterBuildPrompt,
+  priorSummary: string,
+  userMessage: string,
+  assistantReply: string
+): Promise<string> {
+  const { text } = await flashChatComplete(
+    [
+      {
+        role: "system",
+        content:
+          `Update brainstorm notes for ${mp.appName}. Max 4 short bullets. ` +
+          `Topics discussed, decisions, open questions. Plain text only.`,
+      },
+      {
+        role: "user",
+        content:
+          `Previous:\n${priorSummary || "(empty)"}\n\n` +
+          `User: ${userMessage}\nCoach: ${assistantReply}\n\nUpdated notes:`,
+      },
+    ],
+    { temperature: 0.3, maxTokens: 200, timeoutMs: 15_000 }
+  );
+
+  const next = text.trim().slice(0, 500);
+  return next || priorSummary;
+}
+
+async function detectBuildSuggestion(
+  mp: MasterBuildPrompt,
+  userMessage: string,
+  assistantReply: string
+): Promise<BrainstormBuildSuggestion | null> {
+  const { text } = await flashChatComplete(
+    [
+      {
+        role: "system",
+        content:
+          `JSON only. Does the user want a CONCRETE preview/UI change in ${mp.appName}? ` +
+          `{"suggest":false} OR {"suggest":true,"label":"short","prompt":"build instruction"}. ` +
+          `Not for backend/legal/database/Supabase/auth — preview UI only (headlines, colors, copy, layout).`,
+      },
+      {
+        role: "user",
+        content: `User: ${userMessage}\nCoach: ${assistantReply}`,
+      },
+    ],
+    { temperature: 0.2, maxTokens: 100, timeoutMs: 12_000 }
+  );
+
+  const suggestion = parseBuildSuggestionJson(text);
+  if (suggestion && isBackendBuildRequest(suggestion.prompt)) return null;
+  return suggestion;
+}
+
+/** Conversational brainstorm — Qwen only, retrieved context, no generic templates. */
 export async function runBrainstormChat(
   mp: MasterBuildPrompt,
   history: BrainstormTurn[],
@@ -69,35 +179,67 @@ export async function runBrainstormChat(
     interview?: InterviewTurn[];
     audit?: AppReadinessAudit | null;
     pinnedItem?: ReadinessItem | null;
+    existingSummary?: string;
+    connectorNote?: string;
   }
-): Promise<string> {
-  const model = options?.model ?? null;
+): Promise<BrainstormChatResult> {
+  const previewModel = options?.model ?? null;
   const interview = options?.interview ?? [];
   const audit =
     options?.audit ??
-    (model ? auditAppReadiness(model, mp, interview) : null);
+    (previewModel ? auditAppReadiness(previewModel, mp, interview) : null);
+  const pinned = options?.pinnedItem ?? null;
+  const summary = options?.existingSummary ?? "";
 
-  const messages = [
-    {
-      role: "system" as const,
-      content: systemPrompt(mp, model, audit, interview, options?.pinnedItem),
-    },
-    ...history.slice(-8).map((t) => ({
-      role: t.role,
-      content: t.content,
-    })),
-    { role: "user" as const, content: message },
-  ];
+  const retrieved = retrieveBrainstormContext(
+    message,
+    history,
+    mp,
+    previewModel,
+    audit,
+    interview,
+    pinned,
+    summary
+  );
 
-  const { text } = await flashChatComplete(messages, {
-    temperature: 0.65,
-    maxTokens: 380,
-    timeoutMs: 25_000,
-  });
+  const contextBlock = formatRetrievedContextForPrompt(
+    retrieved,
+    summary,
+    options?.connectorNote
+  );
+  const system = buildSystemPrompt(mp, contextBlock, history);
+  const longForm =
+    retrieved.intent === "full_walkthrough" ||
+    isDeepBrainstormMessage(message, history);
 
-  const reply = text.trim();
-  if (!reply) {
-    return "Good question — want me to walk through what's missing before you ship, or focus on one feature?";
+  const messages = buildMessages(system, history, message.trim());
+
+  let reply = await coachReply(messages, longForm);
+
+  if (!reply || isGenericBrainstormReply(reply)) {
+    reply = await coachReply(
+      buildMessages(
+        system +
+          "\n\nYour last reply was rejected — too generic, a checklist dump, or implied you can see their screen. " +
+          `Reply again: ONLY about "${retrieved.focusItems[0]?.title ?? message}" for ${mp.appName}. ` +
+          "Refer to the app design / build plan — never 'you're looking at'. Engineer coffee-chat tone.",
+        history,
+        message.trim()
+      ),
+      longForm
+    );
   }
-  return reply.slice(0, 800);
+
+  if (!reply || isGenericBrainstormReply(reply)) {
+    reply = composeOfflineCoachReply(retrieved, mp.appName);
+  }
+
+  reply = stripTiredOpeners(reply).slice(0, 1200);
+
+  const [nextSummary, buildSuggestion] = await Promise.all([
+    refreshBrainstormSummary(mp, summary, message, reply),
+    detectBuildSuggestion(mp, message, reply),
+  ]);
+
+  return { reply, buildSuggestion, summary: nextSummary };
 }

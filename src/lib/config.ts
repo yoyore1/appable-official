@@ -68,8 +68,8 @@ export const integrations = {
     env("NEXT_PUBLIC_SUPABASE_URL") && env("SUPABASE_SERVICE_ROLE_KEY")
   ),
   stripe: Boolean(env("STRIPE_SECRET_KEY")),
-  chatModel: Boolean(env("CHAT_MODEL_BASE_URL") && env("CHAT_MODEL_KEY")),
-  cheapTextModel: Boolean(env("CHAT_MODEL_BASE_URL") && env("CHAT_MODEL_KEY")),
+  chatModel: Boolean(deepinfraKey()),
+  cheapTextModel: Boolean(deepinfraKey()),
   /** Kimi (or other strong model) for master-plan synthesis — separate from cheap chat. */
   planModel: Boolean(
     (env("BUILD_MODEL_BASE_URL") && env("BUILD_MODEL_KEY")) ||
@@ -107,8 +107,8 @@ export const stripeConfig = {
 };
 
 export const cheapTextModel = {
-  baseUrl: env("CHAT_MODEL_BASE_URL"),
-  key: env("CHAT_MODEL_KEY"),
+  baseUrl: env("CHAT_MODEL_BASE_URL") ?? deepinfra.openaiBase,
+  key: deepinfraKey(),
   name: env("CHAT_MODEL_NAME") ?? "Qwen/Qwen3.6-35B-A3B",
 };
 

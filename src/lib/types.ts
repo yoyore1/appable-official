@@ -79,7 +79,7 @@ export interface InterviewStepPrefetch {
 }
 
 /** User progress on launch-readiness checklist (Phase 2 brainstorm). */
-export type ReadinessDecision = "yes" | "later" | "skip";
+export type ReadinessDecision = "done" | "yes" | "later" | "skip";
 
 export interface ReadinessItemState {
   discussed: boolean;
@@ -91,6 +91,81 @@ export interface ProjectReadinessState {
   items: Record<string, ReadinessItemState>;
   pinnedItemId?: string | null;
   lastAuditAt?: string;
+}
+
+/** One turn in post-build brainstorm chat (persisted on the project). */
+export type BrainstormTurn = { role: "user" | "assistant"; content: string };
+
+/** Actionable preview change surfaced by brainstorm → hand off to Build tab. */
+export interface BrainstormBuildSuggestion {
+  label: string;
+  prompt: string;
+}
+
+/** Persisted brainstorm thread + rolling summary for Build agent context. */
+export interface ProjectBrainstormState {
+  history: BrainstormTurn[];
+  summary: string;
+  pendingBuild?: BrainstormBuildSuggestion | null;
+}
+
+export type SupabaseConnectorStatus = "connected" | "setup_failed" | "disconnected";
+
+/** Safe to show in UI — no API keys. */
+export interface SupabaseConnectorPublic {
+  projectRef: string;
+  projectName: string;
+  url: string;
+  region?: string | null;
+  status: SupabaseConnectorStatus;
+  connectedAt: string;
+  schemaVersion: number;
+  setupError?: string | null;
+  /** POST target for Supabase database webhooks (profile sync → RevenueCat). */
+  webhookUrl?: string;
+}
+
+/** Encrypted Supabase link for a project (BYO — user's own Supabase org). */
+export interface ProjectSupabaseConnector {
+  public: SupabaseConnectorPublic;
+  anonKeyEnc: string;
+  serviceRoleKeyEnc: string;
+  /** Verifies POST /api/webhooks/supabase/[projectId] */
+  webhookSecretEnc?: string;
+}
+
+export type RevenueCatConnectorStatus = "connected" | "disconnected";
+
+export interface RevenueCatConnectorPublic {
+  status: RevenueCatConnectorStatus;
+  connectedAt: string;
+  publicApiKeyHint: string;
+  webhookUrl: string;
+  webhooksConfigured: boolean;
+}
+
+/** Encrypted RevenueCat keys + webhook auth for a project. */
+export interface ProjectRevenueCatConnector {
+  public: RevenueCatConnectorPublic;
+  publicApiKeyEnc: string;
+  secretApiKeyEnc: string;
+  webhookSecretEnc: string;
+}
+
+export type RailwayConnectorStatus = "connected" | "disconnected";
+
+export interface RailwayConnectorPublic {
+  status: RailwayConnectorStatus;
+  connectedAt: string;
+  /** Public URL of the deployed Railway service the app calls. */
+  serviceUrl: string;
+  accountHint: string;
+}
+
+/** Encrypted Railway API token for a project. */
+export interface ProjectRailwayConnector {
+  public: RailwayConnectorPublic;
+  apiTokenEnc: string;
 }
 
 export interface Project {
@@ -119,6 +194,14 @@ export interface Project {
   expoPreviewToken?: string | null;
   /** Launch checklist progress — discussed items & decisions. */
   readinessState?: ProjectReadinessState | null;
+  /** Brainstorm chat history + summary (Build agent reads this). */
+  brainstormState?: ProjectBrainstormState | null;
+  /** Linked Supabase project — keys stored encrypted server-side. */
+  supabaseConnector?: ProjectSupabaseConnector | null;
+  /** Linked RevenueCat project — keys + webhook sync to Supabase. */
+  revenueCatConnector?: ProjectRevenueCatConnector | null;
+  /** Linked Railway project — custom API / worker hosting. */
+  railwayConnector?: ProjectRailwayConnector | null;
   /** Guest-session AI spend (merged to user on claim). */
   aiUsageUsd?: number;
   createdAt: string;

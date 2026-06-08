@@ -85,6 +85,14 @@ export function critiqueExpoApp(
 
   if (!input.profile?.settings?.length) {
     issues.push("Profile needs settings rows");
+  } else {
+    const labels = input.profile.settings.map((s) => s.label);
+    if (!labels.some((l) => /sign[\s-]?out|log[\s-]?out/i.test(l))) {
+      issues.push("Profile settings need Sign out");
+    }
+    if (!labels.some((l) => /delete\s+(my\s+)?account|remove\s+account/i.test(l))) {
+      issues.push("Profile settings need Delete account");
+    }
   }
 
   const planCategory =

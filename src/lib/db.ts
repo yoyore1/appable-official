@@ -118,6 +118,7 @@ export const db = {
       expoAppModel: null,
       expoPreviewToken: null,
       readinessState: null,
+      brainstormState: null,
       aiUsageUsd: 0,
       createdAt: now(),
       updatedAt: now(),

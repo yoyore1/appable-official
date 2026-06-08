@@ -127,6 +127,7 @@ function inferEssentialFeatures(
   // Universal preview affordances (already wired in smartInteractions)
   essentials.push("Save favorites on detail cards");
   essentials.push("Working profile settings rows");
+  essentials.push("Sign out and Delete account in Profile settings");
 
   return [...new Set(essentials)];
 }

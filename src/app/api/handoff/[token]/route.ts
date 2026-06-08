@@ -30,6 +30,10 @@ export async function GET(
     return NextResponse.json({ error: "not_ready" }, { status: 409 });
   }
 
+  const { supabaseConnectorForBuilder } = await import(
+    "@/lib/connectors/supabaseConnector"
+  );
+
   return NextResponse.json({
     app: {
       id: project.id,
@@ -39,6 +43,9 @@ export async function GET(
       status: project.status,
     },
     masterPrompt: project.masterPrompt,
+    connectors: {
+      supabase: supabaseConnectorForBuilder(project.supabaseConnector),
+    },
     user: {
       id: user.id,
       email: user.email,

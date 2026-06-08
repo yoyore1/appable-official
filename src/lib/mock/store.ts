@@ -51,6 +51,7 @@ function migrateProject(p: Project): Project {
     expoAppModel: p.expoAppModel ?? null,
     expoPreviewToken: p.expoPreviewToken ?? null,
     readinessState: p.readinessState ?? null,
+    brainstormState: p.brainstormState ?? null,
     aiUsageUsd: p.aiUsageUsd ?? 0,
     masterPrompt: p.masterPrompt ? normalizeMasterPrompt(p.masterPrompt) : null,
   };

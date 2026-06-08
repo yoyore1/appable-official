@@ -58,6 +58,22 @@ export interface ExpoSetupField {
   section?: string;
 }
 
+/** Sign-up / sign-in screen in the web preview — wired to Supabase when connected. */
+export interface ExpoAuthFlow {
+  enabled: boolean;
+  /** Use linked Supabase project for real sign-up (anon client). */
+  liveSupabase?: boolean;
+  signUpTitle: string;
+  signUpSubtitle?: string;
+  submitLabel: string;
+  captureName: boolean;
+  /** Owner / walker on the same screen as email + password. */
+  captureRoleInSignUp: boolean;
+  /** Shown above email form — default on when auth is enabled. */
+  showGoogleSignIn?: boolean;
+  showAppleSignIn?: boolean;
+}
+
 /** First-launch flow before main tabs — role pick + profile wizard. */
 export interface ExpoAppFlow {
   welcomeTitle?: string;
@@ -66,6 +82,7 @@ export interface ExpoAppFlow {
   setupTitle?: string;
   setupSubtitle?: string;
   setupFields?: ExpoSetupField[];
+  auth?: ExpoAuthFlow;
 }
 
 export interface ExpoBuildRecap {

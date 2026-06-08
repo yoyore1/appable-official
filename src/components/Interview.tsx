@@ -552,24 +552,31 @@ export function Interview({
               }`}
             >
               {b.role === "user" && b.questionId ? (
-                <button
-                  type="button"
-                  disabled={busy || building}
-                  onClick={() => beginEdit(b)}
+                <div
+                  role="button"
+                  tabIndex={busy || building ? -1 : 0}
+                  onClick={() => !busy && !building && beginEdit(b)}
+                  onKeyDown={(e) => {
+                    if (!busy && !building && (e.key === "Enter" || e.key === " ")) {
+                      e.preventDefault();
+                      beginEdit(b);
+                    }
+                  }}
                   title="Tap to edit"
-                  className="group max-w-[85%] min-w-0 break-words rounded-3xl rounded-br-lg bg-coral/15 px-4 py-2.5 text-left text-charcoal transition hover:bg-coral/22 hover:ring-2 hover:ring-coral/25 disabled:opacity-60"
+                  className="chat-bubble-user group max-w-[85%] min-w-0 cursor-pointer break-words rounded-3xl rounded-br-lg bg-coral/15 px-4 py-2.5 text-left text-charcoal transition hover:bg-coral/22 hover:ring-2 hover:ring-coral/25 aria-disabled:opacity-60"
+                  aria-disabled={busy || building}
                 >
                   {b.text}
                   <span className="mt-1 block text-[10px] font-medium text-warmgrey opacity-0 transition group-hover:opacity-100">
                     Tap to edit
                   </span>
-                </button>
+                </div>
               ) : (
                 <div
                   className={
                     b.role === "user"
-                      ? "max-w-[85%] min-w-0 break-words rounded-3xl rounded-br-lg bg-coral/15 px-4 py-2.5 text-charcoal"
-                      : "max-w-[85%] min-w-0 break-words rounded-3xl rounded-bl-lg bg-cream px-4 py-2.5 text-charcoal shadow-soft"
+                      ? "chat-bubble-user max-w-[85%] min-w-0 break-words rounded-3xl rounded-br-lg bg-coral/15 px-4 py-2.5 text-charcoal"
+                      : "chat-bubble-ai max-w-[85%] min-w-0 break-words rounded-3xl rounded-bl-lg bg-cream px-4 py-2.5 text-charcoal shadow-soft"
                   }
                 >
                   {b.text}

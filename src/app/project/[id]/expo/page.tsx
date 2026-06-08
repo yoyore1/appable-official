@@ -56,6 +56,10 @@ export default async function ExpoBuildPage({
         initialModel={project.expoAppModel}
         interview={project.interview}
         initialReadinessState={project.readinessState}
+        initialBrainstormState={project.brainstormState}
+        initialSupabaseConnector={project.supabaseConnector?.public ?? null}
+        initialRevenueCatConnector={project.revenueCatConnector?.public ?? null}
+        initialRailwayConnector={project.railwayConnector?.public ?? null}
         showWatermark={shouldShowAppableWatermark(user)}
         previewToken={project.expoPreviewToken ?? null}
         className="min-h-0 flex-1"

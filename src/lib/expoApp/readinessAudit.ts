@@ -6,6 +6,8 @@ import type {
   ReadinessItemState,
 } from "@/lib/types";
 import { buildInterviewContext } from "./interviewContext";
+import { authBrainstormPillPrompt, authBuildPillPrompt, authChecklistWhy } from "./authGuidance";
+import { modelHasAccountControls, withLegalSettings } from "./smartInteractions";
 import type { ExpoAppModel } from "./types";
 
 export type ReadinessCategory =
@@ -47,11 +49,14 @@ export interface AppReadinessAudit {
   topGaps: ReadinessItem[];
 }
 
-/** One-tap next step above chat — label on pill, prompt in input. */
+/** One-tap next step above chat — label on pill, prompts per chat mode. */
 export interface ReadinessSuggestion {
   id: string;
   label: string;
+  /** Brainstorm tab — planning / questions. */
   prompt: string;
+  /** Build tab — imperative preview change. */
+  buildPrompt: string;
   itemId: string;
   step: number;
 }
@@ -232,14 +237,59 @@ export function auditAppReadiness(
     blob,
     /sign[\s-]?in|log[\s-]?in|account|auth|register|email password/
   );
+  const authInPreview = Boolean(model.flow?.auth?.enabled);
   push(items, {
     id: "auth",
     category: "auth",
     title: "Sign up & sign in",
-    status: authMentioned ? "partial" : "missing",
+    status: authInPreview ? "partial" : authMentioned ? "partial" : "missing",
+    plainWhy: authChecklistWhy(authInPreview),
+    inPreview: authInPreview,
+    priority: "launch_blocker",
+  });
+
+  if (authInPreview || authMentioned) {
+    push(items, {
+      id: "google-sign-in",
+      category: "auth",
+      title: "Google login",
+      status: authInPreview ? "partial" : "missing",
+      plainWhy:
+        "Buttons are in the preview — follow the Google guide under Connections (copy-paste). Email still works for testing.",
+      inPreview: authInPreview,
+      priority: "soon",
+    });
+    push(items, {
+      id: "apple-sign-in",
+      category: "auth",
+      title: "Apple login",
+      status: authInPreview ? "partial" : "missing",
+      plainWhy:
+        "Before the App Store — step-by-step under Connections. Needs Apple Developer ($99/yr). Skip until launch.",
+      inPreview: authInPreview,
+      priority: "soon",
+    });
+  }
+
+  const accountControls = modelHasAccountControls(withLegalSettings(model));
+  const accountStatus: ReadinessStatus =
+    accountControls.signOut && accountControls.deleteAccount
+      ? "have"
+      : accountControls.signOut || accountControls.deleteAccount
+        ? "partial"
+        : "missing";
+  push(items, {
+    id: "account-controls",
+    category: "auth",
+    title: "Sign out & delete account",
+    status: accountStatus,
     plainWhy:
-      "People need their own account so data follows them across devices. The preview does not save accounts yet.",
-    inPreview: false,
+      accountStatus === "have"
+        ? "Profile → Settings includes Sign out and Delete account — required for real apps and App Store review."
+        : accountStatus === "partial"
+          ? "You need both Sign out and Delete account in Profile settings — Apple requires easy account exit and deletion."
+          : "Every app needs Sign out and Delete account in Profile settings once people can create accounts.",
+    inPreview: accountStatus !== "missing",
     priority: "launch_blocker",
   });
 
@@ -427,6 +477,9 @@ function suggestionScore(item: ReadinessItem): number {
   if (item.status === "missing") s += 40;
   if (item.status === "partial") s += 15;
   if (item.category === "auth") s += 35;
+  if (item.id === "account-controls") s += 28;
+  if (item.id === "google-sign-in") s += 22;
+  if (item.id === "apple-sign-in") s += 12;
   if (item.category === "backend") s += 30;
   if (item.category === "messaging") s += 20;
   if (item.category === "payments") s += 18;
@@ -437,6 +490,9 @@ function suggestionScore(item: ReadinessItem): number {
 function pillLabel(item: ReadinessItem): string {
   const byId: Record<string, string> = {
     auth: "Set up sign in",
+    "google-sign-in": "Google login",
+    "apple-sign-in": "Apple login",
+    "account-controls": "Sign out & delete",
     backend: "Where data lives",
     messaging: "In-app messaging",
     payments: "Payments",
@@ -451,7 +507,10 @@ function pillLabel(item: ReadinessItem): string {
 
 function pillPrompt(item: ReadinessItem, appName: string): string {
   const byId: Record<string, string> = {
-    auth: `What do I need to set up sign in for ${appName}? Walk me through it simply.`,
+    auth: authBrainstormPillPrompt(appName),
+    "google-sign-in": `Walk me through turning on Google login for ${appName} — keep it simple, step by step.`,
+    "apple-sign-in": `When do I need Apple login for ${appName}, and how do I set it up?`,
+    "account-controls": `Why does ${appName} need Sign out and Delete account buttons? Where should they go?`,
     backend: `What is Supabase and what would ${appName} need to store there?`,
     messaging: `How should in-app messaging work for ${appName}?`,
     payments: `Do I need payments for ${appName}? What are my options?`,
@@ -467,6 +526,27 @@ function pillPrompt(item: ReadinessItem, appName: string): string {
   );
 }
 
+function pillBuildPrompt(item: ReadinessItem, appName: string): string {
+  const byId: Record<string, string> = {
+    auth: authBuildPillPrompt(appName),
+    "google-sign-in": `Show me where to set up Google login for ${appName} in Connections.`,
+    "apple-sign-in": `Add a note in ${appName} about Apple login setup before App Store.`,
+    "account-controls": `Add Sign out and Delete account to ${appName}'s Profile settings.`,
+    backend: `Add a profile or settings area in ${appName} that shows where user data would sync.`,
+    messaging: `Add an in-app messaging tab to ${appName} with a sample conversation thread.`,
+    payments: `Add a subscription or paywall screen to ${appName}'s preview.`,
+    legal: `Add Privacy Policy and Terms of Service links to ${appName}'s settings.`,
+    landing: `Add a marketing landing page screen to ${appName} for the App Store.`,
+    onboarding: `Update ${appName}'s onboarding flow so it leads into sign-in at the end.`,
+    roles: `Add separate owner and provider account flows in ${appName}'s preview.`,
+    push: `Add a notifications settings screen to ${appName}.`,
+  };
+  return (
+    byId[item.id] ??
+    `Update ${appName}'s preview to add ${item.title.toLowerCase()}.`
+  );
+}
+
 /** Top 3 normie next steps — shown as pills above chat. */
 export function getReadinessSuggestions(audit: AppReadinessAudit): ReadinessSuggestion[] {
   const sorted = [...audit.items]
@@ -477,6 +557,7 @@ export function getReadinessSuggestions(audit: AppReadinessAudit): ReadinessSugg
     id: `sug-${item.id}`,
     label: pillLabel(item),
     prompt: pillPrompt(item, audit.appName),
+    buildPrompt: pillBuildPrompt(item, audit.appName),
     itemId: item.id,
     step: i + 1,
   }));
@@ -497,13 +578,74 @@ export function formatReadinessIntro(audit: AppReadinessAudit): string {
   );
 }
 
-/** Compact context for brainstorm system prompt. */
+/** Internal context for the coach system prompt — not shown to users. */
 export function summarizeAuditForBrainstorm(audit: AppReadinessAudit): string {
-  const lines = audit.items.map(
-    (i) =>
-      `- [${i.status}] ${i.title} (${i.priority}): ${i.plainWhy}${i.inPreview ? " [UI in preview only]" : ""}`
-  );
-  return `APP READINESS AUDIT for ${audit.appName} (${audit.category}):\n${lines.join("\n")}`;
+  const lines = audit.items.map((i) => {
+    const state =
+      i.status === "have" ? "ready" : i.status === "partial" ? "preview only" : "still to plan";
+    return `- ${i.title} (${state}): ${i.plainWhy}`;
+  });
+  return `Checklist context for ${audit.appName}:\n${lines.join("\n")}`;
+}
+
+/** Plain-English walkthrough when Qwen is unavailable — uses audit data, not a raw dump. */
+export function formatWalkthroughReply(
+  audit: AppReadinessAudit,
+  pinnedItem?: ReadinessItem | null,
+  continuingTopic?: string | null
+): string {
+  const ready = audit.items.filter((i) => i.status === "have");
+  const previewOnly = audit.items.filter((i) => i.status === "partial");
+  const toPlan = audit.items.filter((i) => i.status === "missing");
+
+  const lines: string[] = [
+    `Alright — here's the real picture for **${audit.appName}** before you ship.`,
+    "",
+    "**What's already solid in your preview**",
+  ];
+
+  if (ready.length > 0) {
+    ready.slice(0, 4).forEach((i) => lines.push(`• ${i.title} — ${i.plainWhy}`));
+  } else {
+    lines.push("• Your core screens and navigation look good for a first pass.");
+  }
+
+  if (previewOnly.length > 0) {
+    lines.push("", "**Looks real in the app, but isn't production-ready yet**");
+    previewOnly.slice(0, 4).forEach((i) => lines.push(`• ${i.title} — ${i.plainWhy}`));
+  }
+
+  if (toPlan.length > 0) {
+    lines.push("", "**Still to plan before the App Store**");
+    toPlan.slice(0, 5).forEach((i, n) => lines.push(`${n + 1}. **${i.title}** — ${i.plainWhy}`));
+  }
+
+  if (continuingTopic?.trim()) {
+    lines.push(
+      "",
+      `You asked about **${continuingTopic.trim().slice(0, 120)}** — here's how that fits ${audit.appName}:`
+    );
+    const match = audit.items.find((i) =>
+      continuingTopic.toLowerCase().includes(i.title.toLowerCase().slice(0, 12))
+    );
+    if (match) {
+      lines.push(`• **${match.title}** — ${match.plainWhy}`);
+    }
+  }
+
+  if (pinnedItem) {
+    lines.push(
+      "",
+      `Right now we're focused on **${pinnedItem.title}** — ${pinnedItem.plainWhy}`
+    );
+  } else if (!continuingTopic) {
+    lines.push(
+      "",
+      "I'd start with **sign-in** (Google + Apple for launch) and **where data lives** — tap a suggestion below."
+    );
+  }
+
+  return lines.join("\n");
 }
 
 /** Short model summary for brainstorm. */
