@@ -5,6 +5,7 @@ import { ArrowUp, Loader2, Wand2, X } from "lucide-react";
 import { PreviewMediaPick } from "@/components/PreviewMediaPick";
 import { appendCoachContext, buildPreviewCoachContext } from "@/lib/expoApp/previewCoachContext";
 import {
+  buildCustomTweakPrompt,
   buildTapToAskDraftPrompt,
   getTapToAskSuggestions,
   type TapToAskSuggestion,
@@ -40,10 +41,12 @@ export function TapToAskPanel({
   const isMedia = isMediaTarget(target);
   const isColor = supportsColorTweak(target.path) && !isMedia;
   const [draft, setDraft] = useState(currentValue);
+  const [customAsk, setCustomAsk] = useState("");
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   useEffect(() => {
     setDraft(currentValue);
+    setCustomAsk("");
   }, [target.path, currentValue]);
 
   useEffect(() => {
@@ -60,6 +63,16 @@ export function TapToAskPanel({
       label: "Ask",
       prompt: buildTapToAskDraftPrompt(model, target, draft, coach),
     });
+  }
+
+  function askCustom() {
+    if (!customAsk.trim() || busy) return;
+    onAsk({
+      id: "custom",
+      label: "Custom",
+      prompt: buildCustomTweakPrompt(model, target, customAsk, coach),
+    });
+    setCustomAsk("");
   }
 
   return (
@@ -141,6 +154,32 @@ export function TapToAskPanel({
                 <span>{s.label}</span>
               </button>
             ))}
+            {!isColor && (
+              <div className="flex items-center gap-2 rounded-xl border border-line/40 px-2 py-1.5 focus-within:border-coral/40">
+                <input
+                  value={customAsk}
+                  onChange={(e) => setCustomAsk(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      e.preventDefault();
+                      askCustom();
+                    }
+                  }}
+                  disabled={busy}
+                  placeholder="Or describe what you want…"
+                  className="min-w-0 flex-1 border-0 bg-transparent px-1 py-1 text-[11px] text-charcoal outline-none placeholder:text-warmgrey/80"
+                />
+                <button
+                  type="button"
+                  disabled={busy || !customAsk.trim()}
+                  onClick={askCustom}
+                  className="grid h-7 w-7 shrink-0 place-items-center rounded-lg bg-gradient-to-br from-coral to-[#ff6b54] text-white disabled:opacity-40"
+                  aria-label="Ask with custom instruction"
+                >
+                  <ArrowUp className="h-3.5 w-3.5" />
+                </button>
+              </div>
+            )}
           </div>
 
           {!isMedia && !isColor && (

@@ -87,6 +87,8 @@ export interface ExpoAppFlow {
   roles?: ExpoUserRole[];
   setupTitle?: string;
   setupSubtitle?: string;
+  /** Primary CTA on the profile setup wizard. */
+  setupSubmitLabel?: string;
   setupFields?: ExpoSetupField[];
   auth?: ExpoAuthFlow;
 }
@@ -140,6 +142,8 @@ export interface ExpoOnboardingSlide {
   demonstrates?: string;
   /** Forward-motion CTA — e.g. "Let's cook", not generic "Get started". */
   ctaLabel?: string;
+  /** Secondary skip link — defaults to "Skip". */
+  skipLabel?: string;
   kind?: OnboardingSlideKind;
 }
 

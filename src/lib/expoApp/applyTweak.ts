@@ -13,12 +13,22 @@ import {
 import { wireSupabaseAuthInPreview } from "./applySupabasePreview";
 import { buildAgentBuiltStateBlock } from "./builtState";
 import {
+  applyBuildPatches,
+  compileBuildHandoff,
+  type CompiledBuildHandoff,
+} from "./compileBuildHandoff";
+import {
   buildCopyUpdateFromCoach,
   expandBuildMessageFromContext,
   inferBuildTaskFromContext,
   isBuildExecutionMessage,
+  shouldApplyBrainstormPatches,
+  tryApplyCopyFromBrainstorm,
   tryApplyRoleCopyFromMessage,
 } from "./resolveBuildIntent";
+import { runKimiBuildAgent, tryAuthDebugBuild } from "./buildAgent";
+import { trySmartBuildCopy } from "./smartBuildCopy";
+import type { BrainstormBuildSuggestion, BuildPatchOp } from "@/lib/types";
 import { withLegalSettings } from "./smartInteractions";
 import type { BrainstormTurn, InterviewTurn } from "@/lib/types";
 import {
@@ -71,7 +81,12 @@ function finishTweak(
 
 export interface ApplyExpoTweakOptions {
   brainstormContext?: string;
+  brainstormSummary?: string;
   brainstormHistory?: BrainstormTurn[];
+  /** Pre-compiled handoff from brainstorm → Build. */
+  compiledHandoff?: CompiledBuildHandoff;
+  buildPatches?: BuildPatchOp[];
+  pendingBuild?: BrainstormBuildSuggestion | null;
   interview?: InterviewTurn[];
   projectId?: string;
   /** @deprecated use connectorState */
@@ -99,10 +114,7 @@ function cleanReply(text: string, message: string): string {
   return first.slice(0, 280);
 }
 
-/** @deprecated use wantsAuthPreviewWork — kept for brainstorm handoff filter */
-export function isBackendBuildRequest(message: string): boolean {
-  return wantsAuthPreviewWork(message) || wantsMessagingBackendWork(message);
-}
+export { isBackendBuildRequest } from "./resolveBuildIntent";
 
 function tryRules(
   model: ExpoAppModel,
@@ -175,11 +187,41 @@ export async function applyExpoTweak(
   const brainstormHistory = options.brainstormHistory ?? [];
   const interview = options.interview ?? [];
   const userMessage = message.trim();
-  const effectiveMessage = expandBuildMessageFromContext(
-    userMessage,
-    brainstormHistory,
-    brainstormContext
-  );
+  const compiled =
+    options.compiledHandoff ??
+    compileBuildHandoff({
+      history: brainstormHistory,
+      model,
+      appName: mp.appName,
+      userMessage,
+      pendingBuild: options.pendingBuild,
+      brainstormContext,
+    });
+
+  const fromBrainstorm = shouldApplyBrainstormPatches(userMessage, options.buildPatches);
+  const patchesToApply = options.buildPatches?.length
+    ? options.buildPatches
+    : compiled.patches.length && fromBrainstorm
+      ? compiled.patches
+      : [];
+
+  const patchResult = applyBuildPatches(model, patchesToApply);
+  if (patchResult) {
+    return finishTweak(
+      patchResult.model,
+      mp,
+      interview,
+      patchResult.reply,
+      compiled.applyPrompt || userMessage,
+      brainstormHistory,
+      brainstormContext
+    );
+  }
+
+  const effectiveMessage =
+    fromBrainstorm && compiled.intent !== "generic" && compiled.applyPrompt
+      ? compiled.applyPrompt
+      : expandBuildMessageFromContext(userMessage, brainstormHistory, brainstormContext);
   const wrap = (m: ExpoAppModel, reply: string) =>
     finishTweak(
       m,
@@ -273,7 +315,37 @@ export async function applyExpoTweak(
   const ruled = tryRules(model, effectiveMessage);
   if (ruled) return wrap(ruled.model, ruled.reply);
 
-  const roleCopy = tryApplyRoleCopyFromMessage(model, effectiveMessage);
+  const authDebug = tryAuthDebugBuild(model, mp, userMessage, connectorState);
+  if (authDebug) {
+    if ("model" in authDebug) {
+      return wrap(authDebug.model, authDebug.reply);
+    }
+    return wrap(model, authDebug.reply);
+  }
+
+  const smartCopy = await trySmartBuildCopy(
+    model,
+    mp,
+    userMessage,
+    interview,
+    brainstormHistory
+  );
+  if (smartCopy?.kind === "applied") {
+    return wrap(smartCopy.model, smartCopy.reply);
+  }
+  if (smartCopy?.kind === "clarify") {
+    return wrap(model, smartCopy.reply);
+  }
+
+  const brainstormCopy =
+    fromBrainstorm
+      ? tryApplyCopyFromBrainstorm(model, effectiveMessage, brainstormHistory)
+      : null;
+  if (brainstormCopy) return wrap(brainstormCopy.model, brainstormCopy.reply);
+
+  const roleCopy = fromBrainstorm
+    ? tryApplyRoleCopyFromMessage(model, effectiveMessage, brainstormHistory)
+    : null;
   if (roleCopy) return wrap(roleCopy.model, roleCopy.reply);
 
   const contextBlock = [
@@ -289,6 +361,23 @@ export async function applyExpoTweak(
     effectiveMessage !== userMessage
       ? `User said: "${userMessage}" (means: ${effectiveMessage})`
       : `User request: ${userMessage}`;
+
+  if (!fromBrainstorm) {
+    const kimiFallback = await runKimiBuildAgent(model, mp, userMessage, {
+      brainstormContext,
+      brainstormHistory,
+      brainstormSummary: options.brainstormSummary,
+      connectorState,
+      connectorNote: brainstormContext,
+      interview,
+    });
+    if (kimiFallback?.kind === "applied") {
+      return wrap(kimiFallback.model, kimiFallback.reply);
+    }
+    if (kimiFallback?.kind === "clarify") {
+      return wrap(model, kimiFallback.reply);
+    }
+  }
 
   const llm = await chatReply(
     `You are the BUILD agent for ${mp.appName}. The user is the founder/dev building this app — implement the product they own, not end-user business flows. ` +
@@ -320,16 +409,30 @@ export async function applyExpoTweak(
       reply
     );
   if (soundsGeneric) {
-    const roleCopyFallback = tryApplyRoleCopyFromMessage(model, effectiveMessage);
-    if (roleCopyFallback) return wrap(roleCopyFallback.model, roleCopyFallback.reply);
+    const smartRetry = await trySmartBuildCopy(model, mp, userMessage, interview);
+    if (smartRetry?.kind === "applied") {
+      return wrap(smartRetry.model, smartRetry.reply);
+    }
+    if (smartRetry?.kind === "clarify") {
+      return wrap(model, smartRetry.reply);
+    }
 
-    const lastCoach = [...brainstormHistory]
-      .reverse()
-      .find((t) => t.role === "assistant")?.content;
-    const pendingCopy = lastCoach ? buildCopyUpdateFromCoach(lastCoach) : null;
-    if (pendingCopy) {
-      const applied = tryApplyRoleCopyFromMessage(model, pendingCopy);
-      if (applied) return wrap(applied.model, applied.reply);
+    if (fromBrainstorm) {
+      const roleCopyFallback = tryApplyCopyFromBrainstorm(
+        model,
+        effectiveMessage,
+        brainstormHistory
+      );
+      if (roleCopyFallback) return wrap(roleCopyFallback.model, roleCopyFallback.reply);
+
+      const lastCoach = [...brainstormHistory]
+        .reverse()
+        .find((t) => t.role === "assistant")?.content;
+      const pendingCopy = lastCoach ? buildCopyUpdateFromCoach(lastCoach, model) : null;
+      if (pendingCopy) {
+        const applied = tryApplyCopyFromBrainstorm(model, pendingCopy, brainstormHistory);
+        if (applied) return wrap(applied.model, applied.reply);
+      }
     }
 
     const task = inferBuildTaskFromContext(brainstormHistory);
@@ -381,13 +484,28 @@ export async function applyExpoTweak(
       );
     }
 
+    if (fromBrainstorm) {
+      const retryCompiled = compileBuildHandoff({
+        history: brainstormHistory,
+        model,
+        appName: mp.appName,
+        userMessage,
+        brainstormContext,
+      });
+      const retryPatches = applyBuildPatches(model, retryCompiled.patches);
+      if (retryPatches) {
+        return wrap(retryPatches.model, retryPatches.reply);
+      }
+
+      const retryCopy = tryApplyCopyFromBrainstorm(model, effectiveMessage, brainstormHistory);
+      if (retryCopy) return wrap(retryCopy.model, retryCopy.reply);
+    }
+
     return wrap(
       model,
       isBackendishRequest(effectiveMessage)
         ? "Try: “wire messaging” or “add sign-up and sign-in with Supabase” — Build handles backend and UI."
-        : userMessage !== effectiveMessage
-          ? `Working on what we discussed — if nothing changed, say “wire messaging” or “create the tables”.`
-          : "I didn't change the preview for that — try something specific (headline, colors, messaging, or auth)."
+        : "I'm not sure which screen or line you mean — quote the text or say the screen (welcome, role picker, home, sign-in)."
     );
   }
 

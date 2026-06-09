@@ -1036,6 +1036,10 @@ export function ExpoLivePreview({
                   appName={readyModel.profile.displayName}
                   flow={readyModel.flow}
                   theme={t}
+                  editMode={editMode}
+                  editPick={editPick}
+                  selectedTarget={selectedTarget}
+                  onSelectTarget={onSelectTarget}
                   onSuccess={finishAuthSignUp}
                 />
               ) : launchPhase === "role" && readyModel.flow?.roles?.length ? (
@@ -1914,7 +1918,7 @@ function RoleSelectScreen({
               <div
                 key={role.id}
                 className="relative flex w-full items-center gap-3 rounded-2xl border p-3 text-left shadow-sm"
-                style={{ borderColor: t.line, background: "#fff" }}
+                style={{ borderColor: t.line, background: t.card }}
               >
                 <SurfaceSelectable
                   overlay
@@ -1938,7 +1942,7 @@ function RoleSelectScreen({
               whileTap={{ scale: 0.98 }}
               onClick={() => onPick(role)}
               className="flex w-full items-center gap-3 rounded-2xl border p-3 text-left shadow-sm"
-              style={{ borderColor: t.line, background: "#fff" }}
+              style={{ borderColor: t.line, background: t.card }}
             >
               {cardInner}
             </motion.button>
@@ -1954,8 +1958,12 @@ function AuthScreen({
   appName,
   flow,
   theme,
+  editMode,
+  editPick,
+  selectedTarget,
+  onSelectTarget,
   onSuccess,
-}: {
+}: FixEditProps & {
   projectId?: string;
   appName: string;
   flow: ExpoAppFlow;
@@ -2115,13 +2123,36 @@ function AuthScreen({
           );
         })}
       </div>
-      <p className="mt-2 text-[12px] font-extrabold" style={{ color: t.charcoal }}>
-        {isSignUp ? auth.signUpTitle : auth.signInTitle}
-      </p>
-      {(isSignUp ? auth.signUpSubtitle : auth.signInSubtitle) && (
-        <p className="mt-0.5 text-[9px]" style={{ color: t.muted }}>
-          {isSignUp ? auth.signUpSubtitle : auth.signInSubtitle}
+      <Selectable
+        editMode={editMode}
+        editPick={editPick}
+        selectedTarget={selectedTarget}
+        onSelectTarget={onSelectTarget}
+        path={isSignUp ? "flow.auth.signUpTitle" : "flow.auth.signInTitle"}
+        label={isSignUp ? "Sign up title" : "Sign in title"}
+        field="title"
+        surface={SURFACE.charcoal(isSignUp ? "Sign up title" : "Sign in title")}
+      >
+        <p className="mt-2 text-[12px] font-extrabold" style={{ color: t.charcoal }}>
+          {isSignUp ? auth.signUpTitle : auth.signInTitle}
         </p>
+      </Selectable>
+      {(isSignUp ? auth.signUpSubtitle : auth.signInSubtitle) && (
+        <Selectable
+          editMode={editMode}
+          editPick={editPick}
+          selectedTarget={selectedTarget}
+          onSelectTarget={onSelectTarget}
+          path={isSignUp ? "flow.auth.signUpSubtitle" : "flow.auth.signInSubtitle"}
+          label={isSignUp ? "Sign up subtitle" : "Sign in subtitle"}
+          field="subtitle"
+          surface={SURFACE.muted(isSignUp ? "Sign up subtitle" : "Sign in subtitle")}
+          className="mt-0.5"
+        >
+          <p className="text-[9px]" style={{ color: t.muted }}>
+            {isSignUp ? auth.signUpSubtitle : auth.signInSubtitle}
+          </p>
+        </Selectable>
       )}
       {isSignUp && auth.captureRoleInSignUp && roles.length > 0 && (
         <div className="mt-2">
@@ -2129,8 +2160,37 @@ function AuthScreen({
             I am a… *
           </p>
           <div className="mt-1 flex flex-wrap gap-1">
-            {roles.map((role) => {
+            {roles.map((role, roleIndex) => {
               const selected = roleId === role.id;
+              const chip = (
+                <span
+                  className="rounded-lg border px-2 py-1 text-[9px] font-semibold transition"
+                  style={{
+                    borderColor: selected ? t.accent : t.line,
+                    background: selected ? `${t.accent}18` : "#fff",
+                    color: t.charcoal,
+                  }}
+                >
+                  {role.emoji ? `${role.emoji} ` : ""}
+                  {role.label}
+                </span>
+              );
+              if (editMode && onSelectTarget) {
+                return (
+                  <Selectable
+                    key={role.id}
+                    editMode={editMode}
+                    editPick={editPick}
+                    selectedTarget={selectedTarget}
+                    onSelectTarget={onSelectTarget}
+                    path={`flow.roles[${roleIndex}].label`}
+                    label={role.label}
+                    field="role label"
+                  >
+                    {chip}
+                  </Selectable>
+                );
+              }
               return (
                 <button
                   key={role.id}
@@ -2222,22 +2282,38 @@ function AuthScreen({
         )}
       </div>
       {error && <p className="mt-2 text-[9px] text-red-600">{error}</p>}
-      <motion.button
-        type="button"
-        whileTap={{ scale: 0.97 }}
-        disabled={!canSubmit || busy}
-        onClick={() => void submit()}
-        className="mt-4 w-full rounded-2xl py-2.5 text-[10px] font-bold text-white disabled:opacity-45"
-        style={{ background: t.accent }}
+      <Selectable
+        editMode={editMode}
+        editPick={editPick}
+        selectedTarget={selectedTarget}
+        onSelectTarget={onSelectTarget}
+        path={isSignUp ? "flow.auth.submitLabel" : "flow.auth.signInSubmitLabel"}
+        label={isSignUp ? "Sign up button" : "Sign in button"}
+        field="button"
+        surface={SURFACE.accent(isSignUp ? "Sign up button" : "Sign in button")}
+        block
+        className="mt-4"
       >
-        {busy
-          ? isSignUp
-            ? "Creating account…"
-            : "Signing in…"
-          : isSignUp
-            ? auth.submitLabel
-            : auth.signInSubmitLabel}
-      </motion.button>
+        <motion.button
+          type="button"
+          whileTap={editMode ? undefined : { scale: 0.97 }}
+          disabled={!editMode && (!canSubmit || busy)}
+          onClick={() => {
+            if (editMode) return;
+            void submit();
+          }}
+          className="w-full rounded-2xl py-2.5 text-[10px] font-bold text-white disabled:opacity-45"
+          style={{ background: t.accent }}
+        >
+          {busy && !editMode
+            ? isSignUp
+              ? "Creating account…"
+              : "Signing in…"
+            : isSignUp
+              ? auth.submitLabel
+              : auth.signInSubmitLabel}
+        </motion.button>
+      </Selectable>
     </motion.div>
   );
 }
@@ -2315,41 +2391,103 @@ function SetupWizardScreen({
         </p>
       </Selectable>
       <div className="mt-3 space-y-2.5">
-        {fields.map((field) => {
+        {fields.map((field, fieldIndex) => {
           const section = field.section;
           const showSection = section && section !== lastSection;
           if (showSection) lastSection = section;
           const value = values[field.id] ?? "";
+          const basePath = `flow.setupFields[${fieldIndex}]`;
           return (
             <div key={field.id}>
               {showSection && (
-                <p className="mb-1 text-[9px] font-bold uppercase tracking-wide" style={{ color: t.muted }}>
-                  {section}
-                </p>
+                <Selectable
+                  editMode={editMode}
+                  editPick={editPick}
+                  selectedTarget={selectedTarget}
+                  onSelectTarget={onSelectTarget}
+                  path={`${basePath}.section`}
+                  label={section!}
+                  field="section header"
+                  className="mb-1"
+                >
+                  <p className="text-[9px] font-bold uppercase tracking-wide" style={{ color: t.muted }}>
+                    {section}
+                  </p>
+                </Selectable>
               )}
-              <label
-                htmlFor={`setup-${field.id}`}
-                className="block text-[9px] font-semibold"
-                style={{ color: t.charcoal }}
+              <Selectable
+                editMode={editMode}
+                editPick={editPick}
+                selectedTarget={selectedTarget}
+                onSelectTarget={onSelectTarget}
+                path={`${basePath}.label`}
+                label={field.label}
+                field="field label"
+                surface={SURFACE.charcoal(field.label)}
               >
-                {field.label}
-                {field.required ? " *" : ""}
-              </label>
+                <label
+                  htmlFor={editMode ? undefined : `setup-${field.id}`}
+                  className="block text-[9px] font-semibold"
+                  style={{ color: t.charcoal }}
+                >
+                  {field.label}
+                  {field.required ? " *" : ""}
+                </label>
+              </Selectable>
+              {editMode && field.placeholder && (
+                <Selectable
+                  editMode={editMode}
+                  editPick={editPick}
+                  selectedTarget={selectedTarget}
+                  onSelectTarget={onSelectTarget}
+                  path={`${basePath}.placeholder`}
+                  label={field.label}
+                  field="placeholder"
+                  surface={SURFACE.muted(`${field.label} placeholder`)}
+                  className="mt-0.5"
+                >
+                  <p className="text-[8px] italic leading-snug" style={{ color: t.muted }}>
+                    Placeholder: {field.placeholder}
+                  </p>
+                </Selectable>
+              )}
               {field.kind === "select" && field.options ? (
                 <div className="mt-1 flex flex-wrap gap-1">
-                  {field.options.map((opt) => {
+                  {field.options.map((opt, optIndex) => {
                     const selected = value === opt;
+                    const chipStyle = {
+                      borderColor: selected ? t.accent : t.line,
+                      background: selected ? `${t.accent}18` : "#fff",
+                      color: t.charcoal,
+                    };
+                    if (editMode && onSelectTarget) {
+                      return (
+                        <Selectable
+                          key={opt}
+                          editMode={editMode}
+                          editPick={editPick}
+                          selectedTarget={selectedTarget}
+                          onSelectTarget={onSelectTarget}
+                          path={`${basePath}.options[${optIndex}]`}
+                          label={opt}
+                          field="option"
+                        >
+                          <span
+                            className="inline-block rounded-lg border px-2 py-1 text-[9px] font-semibold"
+                            style={chipStyle}
+                          >
+                            {opt}
+                          </span>
+                        </Selectable>
+                      );
+                    }
                     return (
                       <button
                         key={opt}
                         type="button"
                         onClick={() => setField(field.id, opt)}
                         className="rounded-lg border px-2 py-1 text-[9px] font-semibold transition"
-                        style={{
-                          borderColor: selected ? t.accent : t.line,
-                          background: selected ? `${t.accent}18` : "#fff",
-                          color: t.charcoal,
-                        }}
+                        style={chipStyle}
                       >
                         {opt}
                       </button>
@@ -2363,7 +2501,13 @@ function SetupWizardScreen({
                   value={value}
                   placeholder={field.placeholder}
                   onChange={(e) => setField(field.id, e.target.value)}
-                  className={`${inputClass} min-h-[4.5rem] resize-none`}
+                  readOnly={editMode}
+                  tabIndex={editMode ? -1 : 0}
+                  className={cn(
+                    inputClass,
+                    "min-h-[4.5rem] resize-none",
+                    editMode && "pointer-events-none opacity-70"
+                  )}
                   style={inputStyle}
                 />
               ) : (
@@ -2373,7 +2517,9 @@ function SetupWizardScreen({
                   value={value}
                   placeholder={field.placeholder ?? field.label}
                   onChange={(e) => setField(field.id, e.target.value)}
-                  className={inputClass}
+                  readOnly={editMode}
+                  tabIndex={editMode ? -1 : 0}
+                  className={cn(inputClass, editMode && "pointer-events-none opacity-70")}
                   style={inputStyle}
                 />
               )}
@@ -2386,7 +2532,7 @@ function SetupWizardScreen({
         editPick={editPick}
         selectedTarget={selectedTarget}
         onSelectTarget={onSelectTarget}
-        path="flow.setupTitle"
+        path="flow.setupSubmitLabel"
         label="Get started button"
         field="button"
         surface={SURFACE.accent("Get started button")}
@@ -2404,7 +2550,7 @@ function SetupWizardScreen({
           className="w-full rounded-2xl py-2.5 text-[10px] font-bold text-white disabled:opacity-45"
           style={{ background: t.accent }}
         >
-          Get Started →
+          {flow.setupSubmitLabel ?? "Get Started →"}
         </motion.button>
       </Selectable>
     </motion.div>
@@ -2569,17 +2715,30 @@ function Onboarding({
         </motion.button>
       </Selectable>
       {!isLast && (
-        <button
-          type="button"
-          onClick={() => {
-            if (editMode) return;
-            onSkip();
-          }}
-          className="mt-1.5 text-center text-[9px] font-semibold"
-          style={{ color: t.muted }}
+        <Selectable
+          editMode={editMode}
+          editPick={editPick}
+          selectedTarget={selectedTarget}
+          onSelectTarget={onSelectTarget}
+          path={`onboarding[${idx}].skipLabel`}
+          label="Skip link"
+          field="link"
+          surface={SURFACE.muted("Skip link")}
+          block
+          className="mt-1.5 text-center"
         >
-          Skip
-        </button>
+          <button
+            type="button"
+            onClick={() => {
+              if (editMode) return;
+              onSkip();
+            }}
+            className="w-full text-[9px] font-semibold"
+            style={{ color: t.muted }}
+          >
+            {slide.skipLabel ?? "Skip"}
+          </button>
+        </Selectable>
       )}
     </motion.div>
   );
@@ -2973,9 +3132,22 @@ function TabScreen({
                   <span className="block text-[10px] font-bold" style={{ color: t.charcoal }}>
                     {item.title}
                   </span>
-                  <span className="block text-[9px]" style={{ color: t.muted }}>
-                    {item.subtitle}
-                  </span>
+                  <Selectable
+                    editMode={editMode}
+                    editPick={editPick}
+                    path={`tabScreens.${tabId}.items[${i}].subtitle`}
+                    label={item.title}
+                    field="List subtitle"
+                    surface={SURFACE.muted(`${item.title} subtitle`)}
+                    selectedTarget={selectedTarget}
+                    onSelectTarget={onSelectTarget}
+                    block
+                    className="mt-0.5"
+                  >
+                    <span className="block text-[9px]" style={{ color: t.muted }}>
+                      {item.subtitle}
+                    </span>
+                  </Selectable>
                 </span>
                 </div>
               </Selectable>
@@ -3070,7 +3242,47 @@ function ItemCard({
   const cardLabel = item.title || "Card";
   const canFix = Boolean(editMode && itemPath && onSelectTarget);
 
-  const tagsRow = (
+  const tagsRow = canFix ? (
+    <span className="flex flex-wrap items-center gap-1">
+      {(item.tags ?? []).map((tag, ti) => (
+        <Selectable
+          key={tag}
+          editMode={editMode}
+          editPick={editPick}
+          path={`${base}.tags[${ti}]`}
+          label={tag}
+          field="tag"
+          selectedTarget={selectedTarget}
+          onSelectTarget={onSelectTarget}
+        >
+          <span
+            className="inline-block rounded-md px-1 py-0.5 text-[7px] font-bold"
+            style={{ background: `${theme.accent}14`, color: theme.accent }}
+          >
+            {tag}
+          </span>
+        </Selectable>
+      ))}
+      {item.badge && (
+        <Selectable
+          editMode={editMode}
+          editPick={editPick}
+          path={`${base}.badge`}
+          label={cardLabel}
+          field="badge"
+          selectedTarget={selectedTarget}
+          onSelectTarget={onSelectTarget}
+        >
+          <span
+            className="inline-block rounded-md px-1 py-0.5 text-[7px] font-bold uppercase"
+            style={{ background: `${theme.accent}18`, color: theme.accent }}
+          >
+            {item.badge}
+          </span>
+        </Selectable>
+      )}
+    </span>
+  ) : (
     <span className="flex flex-wrap items-center gap-1">
       {(item.tags ?? []).map((tag) => (
         <span
@@ -3188,12 +3400,25 @@ function ItemCard({
             <span className="block text-[9px] leading-snug" style={{ color: theme.muted }}>
               {item.subtitle}
             </span>
-            {item.meta && (
-              <span className="mt-0.5 block text-[8px] font-semibold" style={{ color: theme.accent }}>
+          </Selectable>
+          {item.meta && (
+            <Selectable
+              editMode={editMode}
+              editPick={editPick}
+              path={`${base}.meta`}
+              label={cardLabel}
+              field="Card meta"
+              surface={SURFACE.accent(`${cardLabel} meta`)}
+              selectedTarget={selectedTarget}
+              onSelectTarget={onSelectTarget}
+              block
+              className="mt-0.5 pl-[3.25rem] py-0.5"
+            >
+              <span className="block text-[8px] font-semibold" style={{ color: theme.accent }}>
                 {item.meta}
               </span>
-            )}
-          </Selectable>
+            </Selectable>
+          )}
         </div>
       ) : (
         <button type="button" onClick={onOpen} className="flex w-full gap-2 p-2 text-left">
@@ -3335,7 +3560,7 @@ function ProfileScreen({
         </div>
       </div>
       <div className="mt-3 grid grid-cols-3 gap-1.5">
-        {stats.map((s) => (
+        {stats.map((s, si) => (
           <div
             key={s.label}
             className="rounded-xl border py-2 text-center"
@@ -3344,9 +3569,20 @@ function ProfileScreen({
             <p className="text-[10px] font-extrabold" style={{ color: t.charcoal }}>
               {s.value}
             </p>
-            <p className="text-[8px] font-medium" style={{ color: t.muted }}>
-              {s.label}
-            </p>
+            <Selectable
+              editMode={editMode}
+              editPick={editPick}
+              selectedTarget={selectedTarget}
+              onSelectTarget={onSelectTarget}
+              path={`profile.stats[${si}].label`}
+              label={s.label}
+              field="stat label"
+              surface={SURFACE.muted(s.label)}
+            >
+              <p className="text-[8px] font-medium" style={{ color: t.muted }}>
+                {s.label}
+              </p>
+            </Selectable>
           </div>
         ))}
       </div>

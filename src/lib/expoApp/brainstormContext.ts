@@ -1,6 +1,7 @@
 import type {
   BrainstormBuildSuggestion,
   BrainstormTurn,
+  ChatAttachmentRef,
   ProjectBrainstormState,
   ProjectReadinessState,
 } from "@/lib/types";
@@ -52,11 +53,17 @@ export function isDeepBrainstormMessage(
 export function appendBrainstormTurn(
   state: ProjectBrainstormState,
   userMessage: string,
-  assistantReply: string
+  assistantReply: string,
+  opts?: { displayText?: string; attachments?: ChatAttachmentRef[] }
 ): ProjectBrainstormState {
   const next: BrainstormTurn[] = [
     ...state.history,
-    { role: "user", content: userMessage },
+    {
+      role: "user",
+      content: userMessage,
+      displayText: opts?.displayText,
+      attachments: opts?.attachments,
+    },
     { role: "assistant", content: assistantReply },
   ].slice(-40);
   return { ...state, history: next };

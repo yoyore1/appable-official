@@ -6,12 +6,34 @@ import { isDeepBrainstormMessage } from "./brainstormContext";
 import type { AppReadinessAudit, ReadinessItem } from "./readinessAudit";
 import type { ExpoAppModel } from "./types";
 import { founderVoiceBlock } from "./founderVoice";
+import {
+  formatTapScopedCopyBlock,
+  isPerRoleCopyPath,
+  isSharedWelcomeCopyPath,
+  isTapPathScopedMessage,
+  resolveTapEditScope,
+  type TapEditScope,
+} from "./tapEditScope";
 
 export type BrainstormIntent =
   | "single_item"
   | "full_walkthrough"
   | "continuation"
+  | "copy_coaching"
   | "general";
+
+const COPY_COACHING_RE =
+  /\b(role picker|sign-?in|sign-?up|subtitle|description|wording|copy|misleading|shorter|simpl|clearer|friendlier|tempting|looking at|currently says|preview path:|use "|get matched|dog owner|dog walker|walkers? apply|best friend|value prop)\b/i;
+
+function recentCopyThread(history: BrainstormTurn[]): boolean {
+  return history.slice(-6).some(
+    (t) =>
+      t.role === "assistant" &&
+      /Use "|misleading|value prop|dog owner|dog walker|tap \*\*Build\*\*|currently says/i.test(
+        t.content
+      )
+  );
+}
 
 /** One related checklist line max — keeps context tight. */
 const RELATED_ITEM: Record<string, string> = {
@@ -35,6 +57,8 @@ export interface RetrievedBrainstormContext {
   interviewSnippet: string;
   continuingFrom: string | null;
   answerInstructions: string;
+  /** Set when user tapped a specific preview field (tap-to-edit). */
+  tapScope: TapEditScope | null;
 }
 
 function detectIntent(
@@ -43,6 +67,10 @@ function detectIntent(
   pinned: ReadinessItem | null | undefined
 ): BrainstormIntent {
   const m = message.toLowerCase().trim();
+
+  if (COPY_COACHING_RE.test(message) || (recentCopyThread(history) && m.length < 120)) {
+    return "copy_coaching";
+  }
 
   if (
     /what do i need for|what do i need to|tell me about|how do i|how should|what is|what's|explain .+ for/i.test(
@@ -102,6 +130,24 @@ function scoreBestItem(message: string, items: ReadinessItem[]): ReadinessItem |
     }
   }
   return bestScore >= 2 ? best : null;
+}
+
+function resolveTapScopeForCoaching(
+  message: string,
+  history: BrainstormTurn[],
+  model: ExpoAppModel | null,
+  appName: string
+): TapEditScope | null {
+  if (!model) return null;
+  const direct = resolveTapEditScope(model, appName, message);
+  if (direct) return direct;
+  for (let i = history.length - 1; i >= 0; i--) {
+    const turn = history[i];
+    if (turn?.role === "user" && isTapPathScopedMessage(turn.content)) {
+      return resolveTapEditScope(model, appName, turn.content);
+    }
+  }
+  return null;
 }
 
 function buildSpine(mp: MasterBuildPrompt, model: ExpoAppModel | null): string {
@@ -186,12 +232,38 @@ function formatFocusItem(item: ReadinessItem): string {
   return `• ${item.title} (${state}) — ${item.plainWhy}${item.inPreview ? " [mocked in app design, not production]" : ""}`;
 }
 
+function tapCopyCoachingInstructions(appName: string, tapScope: TapEditScope): string {
+  const { target, path } = tapScope;
+  let fieldRule =
+    `You are coaching ONE in-app string for ${appName}. ` +
+    `Path ${path} (${target.label}) is the ONLY field you may replace. ` +
+    `Do NOT rewrite role cards, other subtitles, or other screens unless the user tapped those paths. ` +
+    `Structure: (1) what's weak about the current line (2) Replace it with: "exact new text" — exactly ONE quoted line ` +
+    `(3) why it fits ${appName} (~2 sentences). ~90–140 words. ` +
+    `End with tap **Build** when the line is ready.`;
+
+  if (isSharedWelcomeCopyPath(path)) {
+    fieldRule +=
+      ` This is the shared welcome line above the role buttons — ONE sentence for every user, not separate owner/walker lines.`;
+  } else if (isPerRoleCopyPath(path)) {
+    fieldRule +=
+      ` This is one role card only — coach copy for that role, not the other role.`;
+  }
+
+  return fieldRule;
+}
+
 function answerInstructions(
   intent: BrainstormIntent,
   appName: string,
-  focusItems: ReadinessItem[]
+  focusItems: ReadinessItem[],
+  tapScope?: TapEditScope | null
 ): string {
   const focus = focusItems[0]?.title ?? "their question";
+
+  if (intent === "copy_coaching" && tapScope) {
+    return tapCopyCoachingInstructions(appName, tapScope);
+  }
 
   switch (intent) {
     case "single_item":
@@ -212,6 +284,18 @@ function answerInstructions(
       return (
         `Continue the previous topic for ${appName}. Go deeper on what they were asking — ` +
         `specific to this app, engineer tone, no generic advice. ~150 words.`
+      );
+    case "copy_coaching":
+      return (
+        `You are coaching IN-APP COPY for ${appName} — warm, opinionated, specific to this app. ` +
+        `Structure EVERY reply (including "shorter" / "simpler" follow-ups): ` +
+        `(1) What's weak or strong about the current line — plain English, no jargon ` +
+        `(2) Replace it with: "exact new text" — one quoted line per field discussed ` +
+        `(3) Why it fits this app's audience ` +
+        `If they discuss multiple fields, handle each separately. ` +
+        `Do NOT give owner line + walker line unless they asked about both role cards or the role picker as a whole. ` +
+        `Do NOT telegram-style answers on follow-ups — keep teaching. ~100–170 words. ` +
+        `When they're happy with the copy, end with tap **Build** to apply.`
       );
     default:
       return (
@@ -234,6 +318,45 @@ export function retrieveBrainstormContext(
   const intent = detectIntent(message, history, pinned);
   const items = audit?.items ?? [];
   const focusItems: ReadinessItem[] = [];
+
+  if (intent === "copy_coaching") {
+    const lastUser = [...history].reverse().find((t) => t.role === "user");
+    const tapScope = resolveTapScopeForCoaching(message, history, model, mp.appName);
+    const previewSnippets = tapScope
+      ? formatTapScopedCopyBlock(tapScope)
+      : model
+        ? [
+            model.flow?.welcomeSubtitle
+              ? `Welcome subtitle: "${model.flow.welcomeSubtitle}"`
+              : "",
+            model.flow?.roles?.length
+              ? `Role picker: ${model.flow.roles.map((r) => `${r.label} — "${r.description}"`).join("; ")}`
+              : "",
+            model.flow?.auth?.signInSubtitle
+              ? `Sign-in subtitle: "${model.flow.auth.signInSubtitle}"`
+              : "",
+          ]
+            .filter(Boolean)
+            .join("\n")
+        : "";
+
+    return {
+      intent,
+      focusItems: [],
+      integrationIds: connectorsRequestedInMessage(message),
+      appName: mp.appName,
+      spine: buildSpine(mp, model),
+      builtState: tapScope ? "" : coachBuiltStateBlock(model),
+      previewSnippets,
+      interviewSnippet: interview
+        .slice(-3)
+        .map((t) => `• ${t.answer}`)
+        .join("\n"),
+      continuingFrom: lastUser?.content ?? null,
+      answerInstructions: answerInstructions(intent, mp.appName, focusItems, tapScope),
+      tapScope,
+    };
+  }
 
   const fromMessage = findItemsInMessage(message, items);
   const fromPin = pinned ? [pinned] : [];
@@ -282,6 +405,7 @@ export function retrieveBrainstormContext(
     interviewSnippet,
     continuingFrom,
     answerInstructions: answerInstructions(intent, mp.appName, focusItems),
+    tapScope: null,
   };
 }
 
@@ -324,7 +448,9 @@ export function formatRetrievedContextForPrompt(
 
   if (retrieved.previewSnippets) {
     parts.push(
-      "--- App design facts (you cannot see their screen — describe the plan, not their viewport) ---",
+      retrieved.tapScope
+        ? "--- Tapped field scope (ONLY coach this path) ---"
+        : "--- App design facts (you cannot see their screen — describe the plan, not their viewport) ---",
       retrieved.previewSnippets
     );
   }

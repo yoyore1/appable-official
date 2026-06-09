@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import { flushSync } from "react-dom";
 import { AnimatePresence, motion } from "framer-motion";
 import {
   Check,
@@ -12,6 +13,8 @@ import {
   X,
 } from "lucide-react";
 import { AiBudgetBar } from "@/components/AiBudgetBar";
+import { ChatAttachButton } from "@/components/ChatAttachButton";
+import { ChatMessageAttachments } from "@/components/ChatMessageAttachments";
 import { VoiceMicButton } from "@/components/VoiceMicButton";
 import { useVoiceDictation } from "@/hooks/useVoiceDictation";
 import { BuildModeToggle } from "@/components/BuildModeToggle";
@@ -23,7 +26,6 @@ import { ExpoLivePreview } from "@/components/ExpoLivePreview";
 import { ExpoPhoneGuide } from "@/components/ExpoPhoneGuide";
 import { PreviewCanvasPicker } from "@/components/PreviewCanvasPicker";
 import { FloatingBuildHandoff } from "@/components/FloatingBuildHandoff";
-import { FloatingIntegrationBrief } from "@/components/FloatingIntegrationBrief";
 import { BuildSidePanel } from "@/components/BuildSidePanel";
 import { ReadinessSuggestionBar } from "@/components/ReadinessSuggestionBar";
 import { InsightSuggestionBar } from "@/components/InsightSuggestionBar";
@@ -38,10 +40,6 @@ import {
   integrationChatPrompt,
   integrationExplainPrompt,
 } from "@/lib/connectors/integrationPrompts";
-import {
-  INTEGRATION_BRIEF_REQUEST_RE,
-  resolveIntegrationBrief,
-} from "@/lib/connectors/integrationBrief";
 import {
   getConnectorRecommendations,
   suggestConnectors,
@@ -62,6 +60,10 @@ import { expoBuildMicroSteps } from "@/lib/expoBuildProgress";
 import { planChecklist } from "@/lib/expoPreviewTheme";
 import type { SelectionTweakAction } from "@/lib/expoApp/applySelectionTweak";
 import {
+  tweakProgressLabel,
+  waitForPreviewPaint,
+} from "@/lib/expoApp/previewTweakFeedback";
+import {
   getStringAtPath,
   rolePickerSiblingField,
   type TweakTarget,
@@ -70,7 +72,6 @@ import type { ExpoAppModel } from "@/lib/expoApp/types";
 import {
   clearBrainstormBuildSuggestion,
   expoBrainstormChat,
-  expoIntegrationDeepDive,
   expoSelectionTweak,
   expoTweakChat,
   patchProjectReadiness,
@@ -89,6 +90,7 @@ import { defaultInsightsState, type InsightSuggestion, type ProjectInsightsState
 import { expoInsightsLiveQuery, recordInsightBuildHandoff } from "@/server/insights";
 import type {
   BrainstormTurn,
+  ChatAttachmentRef,
   InterviewTurn,
   MasterBuildPrompt,
   Project,
@@ -98,6 +100,12 @@ import type {
   RevenueCatConnectorPublic,
   SupabaseConnectorPublic,
 } from "@/lib/types";
+import {
+  attachChatFiles,
+  getClipboardImageFiles,
+  MAX_CHAT_ATTACHMENTS,
+  type PendingChatAttachment,
+} from "@/lib/expoApp/chatAttachments";
 import { cn } from "@/lib/utils";
 
 type Phase = "summary" | "edit" | "building" | "done";
@@ -106,6 +114,8 @@ type Bubble = {
   id: string;
   role: "ai" | "user";
   text: string;
+  loading?: boolean;
+  attachments?: ChatAttachmentRef[];
   brainstorm?: boolean;
   /** Live brainstorm thread — replaced from server, not appended one-by-one. */
   brainstormChat?: boolean;
@@ -114,20 +124,57 @@ type Bubble = {
 };
 type ChatMode = "brainstorm" | "build";
 
+function turnDisplayText(turn: BrainstormTurn): string {
+  if (turn.displayText?.trim()) return turn.displayText.trim();
+  if (turn.attachments?.length) {
+    const n = turn.attachments.length;
+    return n === 1 ? `📎 ${turn.attachments[0]!.name}` : `📎 ${n} attachments`;
+  }
+  return turn.content;
+}
+
 function brainstormHistoryToBubbles(history: BrainstormTurn[]): Bubble[] {
   return history.map((turn, i) => ({
     id: `bchat-${i}-${turn.role}`,
     role: turn.role === "user" ? "user" : "ai",
-    text: turn.content,
+    text: turn.role === "user" ? turnDisplayText(turn) : turn.content,
+    attachments: turn.role === "user" ? turn.attachments : undefined,
     brainstorm: true,
     brainstormChat: true,
     historyIndex: turn.role === "user" ? i : undefined,
   }));
 }
 
+function uploadPayload(attachments: PendingChatAttachment[]) {
+  return attachments.map(({ name, mimeType, dataUrl, thumbDataUrl }) => ({
+    name,
+    mimeType,
+    dataUrl,
+    thumbDataUrl,
+  }));
+}
+
+function attachmentRefs(attachments: PendingChatAttachment[]): ChatAttachmentRef[] {
+  return attachments.map((a) => ({
+    name: a.name,
+    kind: a.mimeType.startsWith("image/") ? "image" : "file",
+    thumbDataUrl: a.thumbDataUrl,
+  }));
+}
+
 function mergeBrainstormBubbles(prev: Bubble[], history: BrainstormTurn[]) {
   const intro = prev.filter((b) => !b.brainstormChat);
   return [...intro, ...brainstormHistoryToBubbles(history)];
+}
+
+type BrainstormChatResult = Awaited<ReturnType<typeof expoBrainstormChat>>;
+
+function brainstormFailureMessage(
+  res: BrainstormChatResult | undefined | void,
+  fallback = "Brainstorm hit a snag — try again."
+): string {
+  if (res && !res.ok) return res.message;
+  return fallback;
 }
 
 export function ExpoBuildRoom({
@@ -177,6 +224,8 @@ export function ExpoBuildRoom({
   const [stepIdx, setStepIdx] = useState(0);
   const [buildLabels, setBuildLabels] = useState<string[]>([]);
   const [tweakInput, setTweakInput] = useState("");
+  const [pendingAttachments, setPendingAttachments] = useState<PendingChatAttachment[]>([]);
+  const [attachError, setAttachError] = useState<string | null>(null);
   const [chatMode, setChatMode] = useState<ChatMode>("brainstorm");
   const [brainstormState, setBrainstormState] = useState<ProjectBrainstormState>(
     () => initialBrainstormState ?? defaultBrainstormState()
@@ -185,6 +234,7 @@ export function ExpoBuildRoom({
   const [editPick, setEditPick] = useState<EditPick>("content");
   const [fixTarget, setFixTarget] = useState<TweakTarget | null>(null);
   const [fixBusy, setFixBusy] = useState(false);
+  const [fixStatus, setFixStatus] = useState<string | null>(null);
   const [budgetKey, setBudgetKey] = useState(0);
   const [readinessState, setReadinessState] = useState<ProjectReadinessState>(
     () => initialReadinessState ?? defaultReadinessState()
@@ -215,6 +265,7 @@ export function ExpoBuildRoom({
   const endRef = useRef<HTMLDivElement>(null);
   const chatInputRef = useRef<HTMLTextAreaElement>(null);
   const chatSubmittingRef = useRef(false);
+  const pasteBusyRef = useRef(false);
 
   const voice = useVoiceDictation({
     projectId,
@@ -376,10 +427,6 @@ export function ExpoBuildRoom({
   const [pinnedIntegrationId, setPinnedIntegrationId] = useState<ConnectorId | null>(
     null
   );
-  const [briefConsumedIds, setBriefConsumedIds] = useState<Set<ConnectorId>>(
-    () => new Set()
-  );
-
   const highlightedSuggestionId = useMemo(() => {
     if (
       activeSuggestionId &&
@@ -398,31 +445,12 @@ export function ExpoBuildRoom({
     () =>
       resolveBuildHandoff({
         history: brainstormState.history,
-      }),
-    [brainstormState.history]
-  );
-
-  const integrationBrief = useMemo(
-    () =>
-      resolveIntegrationBrief({
-        history: brainstormState.history,
-        pinnedIntegrationId,
+        pendingBuild: brainstormState.pendingBuild,
+        model: appModel,
         appName: plan.appName,
       }),
-    [brainstormState.history, pinnedIntegrationId, plan.appName]
+    [brainstormState.history, brainstormState.pendingBuild, appModel, plan.appName]
   );
-
-  useEffect(() => {
-    if (!integrationBrief) return;
-    const prev = brainstormState.history[brainstormState.history.length - 2];
-    if (prev?.content && INTEGRATION_BRIEF_REQUEST_RE.test(prev.content)) return;
-    setBriefConsumedIds((consumed) => {
-      if (!consumed.has(integrationBrief.integrationId)) return consumed;
-      const next = new Set(consumed);
-      next.delete(integrationBrief.integrationId);
-      return next;
-    });
-  }, [brainstormState.history.length, integrationBrief]);
 
   // When a marketplace integration is pinned, swap explain ↔ implement prompt on mode toggle only.
   useEffect(() => {
@@ -558,16 +586,51 @@ export function ExpoBuildRoom({
     setEditingBuildBubbleIndex(null);
   }
 
+  async function handleChatPaste(e: React.ClipboardEvent<HTMLTextAreaElement>) {
+    if (busy || voice.transcribing || pasteBusyRef.current) return;
+    const images = getClipboardImageFiles(e.clipboardData);
+    if (!images.length) return;
+
+    e.preventDefault();
+    setAttachError(null);
+    pasteBusyRef.current = true;
+    try {
+      let count = pendingAttachments.length;
+      await attachChatFiles(images, {
+        currentCount: count,
+        onAttach: (att) => {
+          setPendingAttachments((list) => {
+            if (list.length >= MAX_CHAT_ATTACHMENTS) return list;
+            count = list.length + 1;
+            return [...list, att];
+          });
+        },
+        onError: setAttachError,
+      });
+    } catch (err) {
+      setAttachError(err instanceof Error ? err.message : "Could not paste image.");
+    } finally {
+      pasteBusyRef.current = false;
+    }
+  }
+
   function submitBrainstormMessage(msg: string) {
     const trimmed = msg.trim();
-    if (!trimmed || busy || chatSubmittingRef.current) return;
+    const uploads = uploadPayload(pendingAttachments);
+    const refs = attachmentRefs(pendingAttachments);
+    if ((!trimmed && !uploads.length) || busy || chatSubmittingRef.current) return;
 
     setChatMode("brainstorm");
     const pinnedId = readinessState.pinnedItemId;
     const editTurn = editingBrainstormTurn;
     setTweakInput("");
+    setPendingAttachments([]);
+    setAttachError(null);
     setBusy(true);
     chatSubmittingRef.current = true;
+
+    const bubbleText =
+      trimmed || (refs.length === 1 ? `📎 ${refs[0]!.name}` : `📎 ${refs.length} attachments`);
 
     if (typeof editTurn === "number") {
       const truncated = brainstormState.history.slice(0, editTurn);
@@ -581,7 +644,8 @@ export function ExpoBuildRoom({
         {
           id: "bchat-pending-user",
           role: "user",
-          text: trimmed,
+          text: bubbleText,
+          attachments: refs.length ? refs : undefined,
           brainstormChat: true,
         },
       ]);
@@ -591,7 +655,8 @@ export function ExpoBuildRoom({
         {
           id: "bchat-pending-user",
           role: "user",
-          text: trimmed,
+          text: bubbleText,
+          attachments: refs.length ? refs : undefined,
           brainstormChat: true,
         },
       ]);
@@ -611,10 +676,36 @@ export function ExpoBuildRoom({
       chatSubmittingRef.current = false;
     };
 
+    const applyBrainstormResult = (res: BrainstormChatResult | undefined | void) => {
+      if (res?.ok) {
+        setBrainstormState(res.brainstormState);
+        setBubbles((b) => mergeBrainstormBubbles(b, res.brainstormState.history));
+        if (pinnedId) markPinnedDiscussed(pinnedId);
+        return;
+      }
+      setBubbles((b) => [
+        ...b.filter((x) => x.id !== "bchat-pending-user"),
+        {
+          id: `tu-${Date.now()}`,
+          role: "user",
+          text: bubbleText,
+          attachments: refs.length ? refs : undefined,
+          brainstormChat: true,
+        },
+        {
+          id: `ta-${Date.now()}`,
+          role: "ai",
+          text: brainstormFailureMessage(res),
+          brainstorm: true,
+          brainstormChat: true,
+        },
+      ]);
+    };
+
     if (useLiveInsights && insightsMode === "insights") {
       void expoInsightsLiveQuery(projectId, trimmed)
         .then((res) => {
-          if (res.ok) {
+          if (res?.ok) {
             setBubbles((b) => [
               ...b.filter((x) => x.id !== "bchat-pending-user"),
               {
@@ -632,44 +723,19 @@ export function ExpoBuildRoom({
               },
             ]);
           } else {
-            return expoBrainstormChat(projectId, trimmed, pinnedId, editTurn).then((br) => {
-              if (br.ok) {
-                setBrainstormState(br.brainstormState);
-                setBubbles((b) => mergeBrainstormBubbles(b, br.brainstormState.history));
-                if (pinnedId) markPinnedDiscussed(pinnedId);
-              }
-            });
+            return expoBrainstormChat(projectId, trimmed, pinnedId, editTurn, uploads).then(
+              applyBrainstormResult
+            );
           }
         })
+        .catch(() => applyBrainstormResult(undefined))
         .finally(finish);
       return;
     }
 
-    void expoBrainstormChat(projectId, trimmed, pinnedId, editTurn)
-      .then((res) => {
-        if (res.ok) {
-          setBrainstormState(res.brainstormState);
-          setBubbles((b) => mergeBrainstormBubbles(b, res.brainstormState.history));
-          if (pinnedId) markPinnedDiscussed(pinnedId);
-        } else {
-          setBubbles((b) => [
-            ...b,
-            {
-              id: `tu-${Date.now()}`,
-              role: "user",
-              text: trimmed,
-              brainstormChat: true,
-            },
-            {
-              id: `ta-${Date.now()}`,
-              role: "ai",
-              text: res.message,
-              brainstorm: true,
-              brainstormChat: true,
-            },
-          ]);
-        }
-      })
+    void expoBrainstormChat(projectId, trimmed, pinnedId, editTurn, uploads)
+      .then(applyBrainstormResult)
+      .catch(() => applyBrainstormResult(undefined))
       .finally(finish);
   }
 
@@ -678,29 +744,118 @@ export function ExpoBuildRoom({
     setFixTarget(null);
   }
 
-  function submitBuildMessage(msg: string, truncateBeforeIndex?: number) {
+  async function runSelectionTweak(path: string, action: SelectionTweakAction) {
+    if (fixBusy) return;
+    const pendingId = `fx-${Date.now()}`;
+    const progress = tweakProgressLabel(action, path);
+    const beforeModel = appModel ? JSON.stringify(appModel) : "";
+
+    setFixBusy(true);
+    setFixStatus(progress);
+    setBubbles((b) => [
+      ...b,
+      { id: pendingId, role: "ai", text: progress, loading: true },
+    ]);
+
+    try {
+      const res = await expoSelectionTweak(projectId, path, action);
+      setBudgetKey((k) => k + 1);
+
+      if (res.ok) {
+        flushSync(() => setAppModel(res.model));
+        await waitForPreviewPaint();
+        const previewChanged = JSON.stringify(res.model) !== beforeModel;
+        const finalText =
+          previewChanged || /already|couldn't|didn't/i.test(res.reply)
+            ? res.reply
+            : "Couldn't update the preview — try again.";
+
+        setBubbles((b) =>
+          b.map((x) =>
+            x.id === pendingId ? { ...x, text: finalText, loading: false } : x
+          )
+        );
+        if (action.type === "remove") setFixTarget(null);
+      } else {
+        setBubbles((b) =>
+          b.map((x) =>
+            x.id === pendingId
+              ? { id: x.id, role: "ai", text: res.message, loading: false }
+              : x
+          )
+        );
+      }
+    } catch {
+      setBubbles((b) =>
+        b.map((x) =>
+          x.id === pendingId
+            ? {
+                id: x.id,
+                role: "ai",
+                text: "Couldn't apply that — try again.",
+                loading: false,
+              }
+            : x
+        )
+      );
+    } finally {
+      setFixBusy(false);
+      setFixStatus(null);
+    }
+  }
+
+  function submitBuildMessage(
+    msg: string,
+    truncateBeforeIndex?: number,
+    patches?: import("@/lib/types").BuildPatchOp[]
+  ) {
     const trimmed = msg.trim();
-    if (!trimmed || busy || chatSubmittingRef.current) return;
+    const uploads = uploadPayload(pendingAttachments);
+    const refs = attachmentRefs(pendingAttachments);
+    if ((!trimmed && !uploads.length) || busy || chatSubmittingRef.current) return;
 
     setBusy(true);
     chatSubmittingRef.current = true;
     clearMessageEdit();
+    setTweakInput("");
+    setPendingAttachments([]);
+    setAttachError(null);
+    const bubbleText =
+      trimmed || (refs.length === 1 ? `📎 ${refs[0]!.name}` : `📎 ${refs.length} attachments`);
     setBubbles((b) => {
       const base =
         typeof truncateBeforeIndex === "number" ? b.slice(0, truncateBeforeIndex) : b;
-      return [...base, { id: `tu-${Date.now()}`, role: "user", text: trimmed }];
+      return [
+        ...base,
+        {
+          id: `tu-${Date.now()}`,
+          role: "user",
+          text: bubbleText,
+          attachments: refs.length ? refs : undefined,
+        },
+      ];
     });
 
-    void expoTweakChat(projectId, trimmed)
+    void expoTweakChat(projectId, trimmed, uploads, patches)
       .then((res) => {
-        if (res.ok) setAppModel(res.model);
+        if (res?.ok) setAppModel(res.model);
         setBudgetKey((k) => k + 1);
         setBubbles((b) => [
           ...b,
           {
             id: `ta-${Date.now()}`,
             role: "ai",
-            text: res.ok ? res.reply : res.message,
+            text: res?.ok ? res.reply : res?.message ?? "Build hit a snag — try again.",
+          },
+        ]);
+      })
+      .catch(() => {
+        setBubbles((b) => [
+          ...b,
+          {
+            id: `ta-${Date.now()}`,
+            role: "ai",
+            text: "Build hit a snag — try again.",
           },
         ]);
       })
@@ -710,14 +865,30 @@ export function ExpoBuildRoom({
       });
   }
 
-  function handoffToBuildAndRun(prompt: string) {
+  function handoffToBuildAndRun(
+    handoff:
+      | string
+      | {
+          displayPrompt: string;
+          prompt?: string;
+          patches?: import("@/lib/types").BuildPatchOp[];
+        }
+  ) {
     setChatMode("build");
     setTweakInput("");
     setBrainstormState((s) => ({ ...s, pendingBuild: null }));
     void clearBrainstormBuildSuggestion(projectId).then((res) => {
-      if (res.ok) setBrainstormState(res.brainstormState);
+      if (res?.ok) setBrainstormState(res.brainstormState);
     });
-    submitBuildMessage(prompt);
+    if (typeof handoff === "string") {
+      submitBuildMessage(handoff);
+      return;
+    }
+    submitBuildMessage(
+      handoff.displayPrompt,
+      undefined,
+      handoff.patches?.length ? handoff.patches : undefined
+    );
   }
 
   const [editForm, setEditForm] = useState({
@@ -965,63 +1136,8 @@ export function ExpoBuildRoom({
   const showFloatingBuild =
     phase === "done" &&
     chatMode === "brainstorm" &&
-    Boolean(buildHandoff?.show) &&
+    Boolean(buildHandoff) &&
     !busy;
-
-  const showIntegrationBrief =
-    phase === "done" &&
-    chatMode === "brainstorm" &&
-    Boolean(integrationBrief) &&
-    !briefConsumedIds.has(integrationBrief!.integrationId) &&
-    !busy;
-
-  function runIntegrationBrief() {
-    if (!integrationBrief || busy || chatSubmittingRef.current) return;
-    const { integrationId, userMessage } = integrationBrief;
-    setBriefConsumedIds((s) => new Set(s).add(integrationId));
-    setBusy(true);
-    chatSubmittingRef.current = true;
-    setBubbles((b) => [
-      ...b.filter((x) => x.id !== "bchat-pending-user"),
-      {
-        id: "bchat-pending-user",
-        role: "user",
-        text: userMessage,
-        brainstormChat: true,
-      },
-    ]);
-    void expoIntegrationDeepDive(
-      projectId,
-      integrationId,
-      readinessState.pinnedItemId
-    )
-      .then((res) => {
-        if (res.ok) {
-          setBrainstormState(res.brainstormState);
-          setBubbles((b) => mergeBrainstormBubbles(b, res.brainstormState.history));
-        } else {
-          setBubbles((b) => [
-            ...b,
-            {
-              id: `ta-${Date.now()}`,
-              role: "ai",
-              text: res.message,
-              brainstorm: true,
-              brainstormChat: true,
-            },
-          ]);
-          setBriefConsumedIds((s) => {
-            const next = new Set(s);
-            next.delete(integrationId);
-            return next;
-          });
-        }
-      })
-      .finally(() => {
-        setBusy(false);
-        chatSubmittingRef.current = false;
-      });
-  }
 
   useEffect(() => {
     if (phase === "building" || previewReady) {
@@ -1109,7 +1225,21 @@ export function ExpoBuildRoom({
                       : "chat-bubble-user rounded-2xl rounded-tr-md bg-gradient-to-br from-coral via-coral to-[#ff6b54] px-4 py-2.5 text-[13px] leading-relaxed text-white shadow-[0_6px_20px_-6px_rgba(255,122,99,0.55)]"
                   }
                 >
-                  <ChecklistText text={b.text} variant={b.role === "user" ? "user" : "ai"} />
+                  {b.attachments?.length ? (
+                    <ChatMessageAttachments
+                      attachments={b.attachments}
+                      variant="user"
+                    />
+                  ) : null}
+                  {(b.text || b.role === "ai") &&
+                    (b.loading ? (
+                      <span className="flex items-center gap-2 text-warmgrey">
+                        <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-coral" />
+                        <span>{b.text}</span>
+                      </span>
+                    ) : (
+                      <ChecklistText text={b.text} variant={b.role === "user" ? "user" : "ai"} />
+                    ))}
                 </div>
               </div>
             );
@@ -1229,19 +1359,11 @@ export function ExpoBuildRoom({
           <div className="shrink-0 border-t border-line/25 bg-white/55 px-4 py-3 backdrop-blur-md">
             <FloatingBuildHandoff
               visible={showFloatingBuild}
-              label={buildHandoff?.label ?? "Build it"}
+              label={buildHandoff?.label ?? "Build"}
               busy={busy}
               onBuild={() => {
-                if (buildHandoff?.prompt) handoffToBuildAndRun(buildHandoff.prompt);
+                if (buildHandoff) handoffToBuildAndRun(buildHandoff);
               }}
-            />
-
-            <FloatingIntegrationBrief
-              visible={showIntegrationBrief}
-              label={integrationBrief?.label ?? "Full integration brief"}
-              hint={integrationBrief?.hint ?? ""}
-              busy={busy}
-              onRun={runIntegrationBrief}
             />
 
             {chatMode === "brainstorm" && !fixTarget && insightSuggestions.length > 0 && (
@@ -1284,9 +1406,14 @@ export function ExpoBuildRoom({
               className="flex flex-col gap-1.5"
               onSubmit={(e) => {
                 e.preventDefault();
-                if (!tweakInput.trim() || busy || chatSubmittingRef.current) return;
+                if (
+                  (!tweakInput.trim() && !pendingAttachments.length) ||
+                  busy ||
+                  chatSubmittingRef.current
+                ) {
+                  return;
+                }
                 const msg = tweakInput.trim();
-                setTweakInput("");
 
                 if (chatMode === "brainstorm") {
                   submitBrainstormMessage(msg);
@@ -1302,23 +1429,22 @@ export function ExpoBuildRoom({
                   everything after it.
                 </p>
               )}
-              {editingBrainstormTurn === null &&
-                editingBuildBubbleIndex === null &&
-                phase === "done" &&
-                !voice.statusLabel &&
-                !voice.error && (
-                  <p className="px-1 text-[10px] text-warmgrey">
-                    Hover one of your messages and tap the pencil to edit. When you send, we go
-                    back to that point and remove what came after. Tap the mic to talk.
-                  </p>
-                )}
-              {(voice.statusLabel || voice.error) && (
+              {(voice.statusLabel || voice.error || attachError) && (
                 <p
-                  className={`px-1 text-[10px] ${voice.error ? "font-medium text-coral-deep" : "text-warmgrey"}`}
+                  className={`px-1 text-[10px] ${voice.error || attachError ? "font-medium text-coral-deep" : "text-warmgrey"}`}
                   role="status"
                 >
-                  {voice.error ?? voice.statusLabel}
+                  {voice.error ?? attachError ?? voice.statusLabel}
                 </p>
+              )}
+              {pendingAttachments.length > 0 && (
+                <ChatMessageAttachments
+                  attachments={attachmentRefs(pendingAttachments)}
+                  variant="pending"
+                  onRemove={(i) =>
+                    setPendingAttachments((list) => list.filter((_, idx) => idx !== i))
+                  }
+                />
               )}
               <div className="flex items-end gap-2 rounded-2xl border border-line/35 bg-white/95 p-1.5 shadow-[0_4px_20px_-8px_rgba(43,38,36,0.12),inset_0_1px_0_rgba(255,255,255,0.8)]">
               <textarea
@@ -1326,6 +1452,7 @@ export function ExpoBuildRoom({
                 value={tweakInput}
                 rows={1}
                 onChange={(e) => setTweakInput(e.target.value)}
+                onPaste={(e) => void handleChatPaste(e)}
                 onKeyDown={(e) => {
                   if (e.key === "Escape") {
                     clearMessageEdit();
@@ -1347,6 +1474,17 @@ export function ExpoBuildRoom({
                 className="max-h-40 min-h-9 min-w-0 flex-1 resize-none overflow-y-auto border-0 bg-transparent px-2.5 py-2 text-sm leading-relaxed text-charcoal outline-none placeholder:text-warmgrey/80"
                 disabled={busy || voice.transcribing}
               />
+              <ChatAttachButton
+                disabled={busy || voice.transcribing}
+                count={pendingAttachments.length}
+                onAttach={(att) => {
+                  setAttachError(null);
+                  setPendingAttachments((list) =>
+                    list.length >= MAX_CHAT_ATTACHMENTS ? list : [...list, att]
+                  );
+                }}
+                onError={setAttachError}
+              />
               {voice.supported && (
                 <VoiceMicButton
                   listening={voice.listening}
@@ -1358,7 +1496,11 @@ export function ExpoBuildRoom({
               <button
                 type="submit"
                 className="grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-gradient-to-br from-coral to-[#ff6b54] text-white shadow-[0_4px_14px_-4px_rgba(255,122,99,0.65)] transition hover:brightness-105 disabled:opacity-40"
-                disabled={busy || !tweakInput.trim() || voice.transcribing}
+                disabled={
+                  busy ||
+                  (!tweakInput.trim() && !pendingAttachments.length) ||
+                  voice.transcribing
+                }
               >
                 <Send className="h-4 w-4" />
               </button>
@@ -1415,31 +1557,16 @@ export function ExpoBuildRoom({
                       <PreviewFixPanel
                         key={fixTarget.path}
                         target={fixTarget}
+                        model={appModel}
                         currentValue={getStringAtPath(appModel, fixTarget.path)}
                         roleSibling={rolePickerSiblingField(appModel, fixTarget.path)}
                         plan={plan}
+                        interview={interview}
                         busy={fixBusy}
+                        statusMessage={fixStatus}
                         onClose={() => setFixTarget(null)}
                         onApply={(action: SelectionTweakAction, path?: string) => {
-                          setFixBusy(true);
-                          void expoSelectionTweak(projectId, path ?? fixTarget.path, action)
-                            .then((res) => {
-                              setBudgetKey((k) => k + 1);
-                              if (res.ok) {
-                                setAppModel(res.model);
-                                setBubbles((b) => [
-                                  ...b,
-                                  { id: `fx-${Date.now()}`, role: "ai", text: res.reply },
-                                ]);
-                                if (action.type === "remove") setFixTarget(null);
-                              } else {
-                                setBubbles((b) => [
-                                  ...b,
-                                  { id: `fxe-${Date.now()}`, role: "ai", text: res.message },
-                                ]);
-                              }
-                            })
-                            .finally(() => setFixBusy(false));
+                          void runSelectionTweak(path ?? fixTarget.path, action);
                         }}
                       />
                     )}
@@ -1495,31 +1622,16 @@ export function ExpoBuildRoom({
                         <PreviewFixPanel
                           key={fixTarget.path}
                           target={fixTarget}
+                          model={appModel}
                           currentValue={getStringAtPath(appModel, fixTarget.path)}
                           roleSibling={rolePickerSiblingField(appModel, fixTarget.path)}
                           plan={plan}
+                          interview={interview}
                           busy={fixBusy}
+                          statusMessage={fixStatus}
                           onClose={() => setFixTarget(null)}
                           onApply={(action: SelectionTweakAction, path?: string) => {
-                            setFixBusy(true);
-                            void expoSelectionTweak(projectId, path ?? fixTarget.path, action)
-                              .then((res) => {
-                                setBudgetKey((k) => k + 1);
-                                if (res.ok) {
-                                  setAppModel(res.model);
-                                  setBubbles((b) => [
-                                    ...b,
-                                    { id: `fx-${Date.now()}`, role: "ai", text: res.reply },
-                                  ]);
-                                  if (action.type === "remove") setFixTarget(null);
-                                } else {
-                                  setBubbles((b) => [
-                                    ...b,
-                                    { id: `fxe-${Date.now()}`, role: "ai", text: res.message },
-                                  ]);
-                                }
-                              })
-                              .finally(() => setFixBusy(false));
+                            void runSelectionTweak(path ?? fixTarget.path, action);
                           }}
                         />
                       )}

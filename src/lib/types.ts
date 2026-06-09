@@ -93,13 +93,47 @@ export interface ProjectReadinessState {
   lastAuditAt?: string;
 }
 
+/** Thumbnail shown on a chat message — not the full upload. */
+export type ChatAttachmentRef = {
+  name: string;
+  kind: "image" | "file";
+  thumbDataUrl?: string;
+};
+
+/** Client → server upload payload (data URL, base64). */
+export type ChatAttachmentUpload = {
+  name: string;
+  mimeType: string;
+  dataUrl: string;
+  thumbDataUrl?: string;
+};
+
 /** One turn in post-build brainstorm chat (persisted on the project). */
-export type BrainstormTurn = { role: "user" | "assistant"; content: string };
+export type BrainstormTurn = {
+  role: "user" | "assistant";
+  content: string;
+  /** What the founder typed — attachment analysis lives in content. */
+  displayText?: string;
+  attachments?: ChatAttachmentRef[];
+};
+
+/** One deterministic preview field update (path in expoAppModel). */
+export interface BuildPatchOp {
+  path: string;
+  value: string;
+  label: string;
+}
+
+export type BuildHandoffIntent = "copy" | "messaging" | "auth" | "sign_out" | "generic";
 
 /** Actionable preview change surfaced by brainstorm → hand off to Build tab. */
 export interface BrainstormBuildSuggestion {
   label: string;
+  /** Human-readable line shown in Build chat. */
   prompt: string;
+  /** Structured edits — applied before any LLM guesswork. */
+  patches?: BuildPatchOp[];
+  intent?: BuildHandoffIntent;
 }
 
 /** Persisted brainstorm thread + rolling summary for Build agent context. */

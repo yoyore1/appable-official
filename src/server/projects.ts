@@ -442,7 +442,8 @@ export async function expoBrainstormChat(
   projectId: string,
   message: string,
   pinnedItemId?: string | null,
-  editFromTurnIndex?: number | null
+  editFromTurnIndex?: number | null,
+  attachments?: import("@/lib/types").ChatAttachmentUpload[]
 ): Promise<
   | {
       ok: true;
@@ -452,12 +453,16 @@ export async function expoBrainstormChat(
     }
   | { ok: false; message: string }
 > {
-  const user = await requireUser();
-  const project = await db.getProject(projectId);
-  if (!project || project.userId !== user.id) throw new Error("NOT_FOUND");
-  if (!project.masterPrompt) throw new Error("NO_PROMPT");
-
   try {
+    const user = await requireUser();
+    const project = await db.getProject(projectId);
+    if (!project || project.userId !== user.id) {
+      return { ok: false, message: "Project not found." };
+    }
+    if (!project.masterPrompt) {
+      return { ok: false, message: "Finish setup before brainstorming." };
+    }
+
     const previewModel = project.expoAppModel ?? null;
     const interview = project.interview ?? [];
     const priorBase = project.brainstormState ?? defaultBrainstormState();
@@ -515,10 +520,28 @@ export async function expoBrainstormChat(
       project.masterPrompt.appName
     );
 
+    const displayText = message.trim();
+    if (!displayText && !attachments?.length) {
+      return { ok: false, message: "Type a message or attach a photo." };
+    }
+
+    let effectiveMessage = displayText;
+    let storedAttachments: import("@/lib/types").ChatAttachmentRef[] | undefined;
+
+    if (attachments?.length) {
+      const { analyzeChatAttachments } = await import("@/lib/expoApp/analyzeChatAttachments");
+      const analyzed = await analyzeChatAttachments(attachments, displayText, {
+        appName: project.masterPrompt.appName,
+        mode: "brainstorm",
+      });
+      effectiveMessage = analyzed.effectiveMessage;
+      storedAttachments = analyzed.storedAttachments;
+    }
+
     const result = await runBrainstormChat(
       project.masterPrompt,
       prior.history,
-      message,
+      effectiveMessage,
       {
         model: previewModel,
         interview,
@@ -530,9 +553,12 @@ export async function expoBrainstormChat(
     );
 
     const brainstormState = {
-      ...appendBrainstormTurn(prior, message, result.reply),
+      ...appendBrainstormTurn(prior, effectiveMessage, result.reply, {
+        displayText: displayText || undefined,
+        attachments: storedAttachments,
+      }),
       summary: result.summary,
-      pendingBuild: result.buildSuggestion ?? prior.pendingBuild ?? null,
+      pendingBuild: result.buildSuggestion ?? null,
     };
 
     await db.updateProject(projectId, { brainstormState });
@@ -543,7 +569,8 @@ export async function expoBrainstormChat(
       buildSuggestion: brainstormState.pendingBuild ?? null,
       brainstormState,
     };
-  } catch {
+  } catch (err) {
+    console.error("[expoBrainstormChat]", err);
     return { ok: false, message: "Brainstorm hit a snag — try again." };
   }
 }
@@ -721,7 +748,9 @@ export async function patchProjectReadiness(
 /** Post-build tweak chat — cheap model, counts against $0.55 AI cap. */
 export async function expoTweakChat(
   projectId: string,
-  message: string
+  message: string,
+  attachments?: import("@/lib/types").ChatAttachmentUpload[],
+  patches?: import("@/lib/types").BuildPatchOp[]
 ): Promise<
   | { ok: true; reply: string; model: ExpoAppModel }
   | { ok: false; reason: "cap_reached" | "error"; message: string }
@@ -779,13 +808,51 @@ export async function expoTweakChat(
     project.expoAppModel
   );
 
+  const displayText = message.trim();
+  if (!displayText && !attachments?.length) {
+    return {
+      ok: false,
+      reason: "error",
+      message: "Type a message or attach a photo.",
+    };
+  }
+
   const { result, charge } = await runWithAiBilling(
     billingScope(project, false),
-    () =>
-      applyExpoTweak(project.expoAppModel!, mp, message, {
+    async () => {
+      let effectiveMessage = displayText;
+      if (attachments?.length) {
+        const { analyzeChatAttachments } = await import("@/lib/expoApp/analyzeChatAttachments");
+        const analyzed = await analyzeChatAttachments(attachments, displayText, {
+          appName: mp.appName,
+          mode: "build",
+        });
+        effectiveMessage = analyzed.effectiveMessage;
+      }
+      const { compileBuildHandoff } = await import("@/lib/expoApp/compileBuildHandoff");
+      const compiled = compileBuildHandoff({
+        history: project.brainstormState?.history ?? [],
+        model: project.expoAppModel!,
+        appName: mp.appName,
+        userMessage: displayText,
+        pendingBuild: project.brainstormState?.pendingBuild,
+        brainstormContext,
+      });
+      const buildPatches =
+        patches?.length ? patches : compiled.patches.length ? compiled.patches : undefined;
+
+      return applyExpoTweak(
+        project.expoAppModel!,
+        mp,
+        buildPatches?.length ? compiled.applyPrompt : effectiveMessage,
+        {
         projectId,
         brainstormContext,
+        brainstormSummary: project.brainstormState?.summary,
         brainstormHistory: project.brainstormState?.history ?? [],
+        compiledHandoff: compiled,
+        buildPatches,
+        pendingBuild: project.brainstormState?.pendingBuild,
         interview: project.interview ?? [],
         connectorState,
         connectorNeeds: connectorSuggestions,
@@ -794,8 +861,10 @@ export async function expoTweakChat(
           const { applyMessagingSchemaToProject } = await import("@/server/connectors");
           return applyMessagingSchemaToProject(id);
         },
-      })
+      });
+    }
   );
+
   if (!charge.ok) {
     return {
       ok: false,

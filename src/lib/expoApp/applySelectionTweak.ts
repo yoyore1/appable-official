@@ -1,4 +1,4 @@
-import { chatReply } from "@/lib/models";
+import { flashChatComplete } from "@/lib/flashChat";
 import { imageForCategory } from "@/lib/expoApp/images";
 import type { InterviewTurn, MasterBuildPrompt } from "@/lib/types";
 import { appendCoachContext, buildPreviewCoachContext } from "./previewCoachContext";
@@ -19,6 +19,7 @@ export type SelectionTweakAction =
   | { type: "rewrite_shorter" }
   | { type: "rewrite_friendly" }
   | { type: "rewrite_pro" }
+  | { type: "rewrite_with"; instruction: string }
   | { type: "accent_brighter" }
   | { type: "swap_image" }
   | { type: "color_lighter" }
@@ -35,6 +36,107 @@ const TONE: Record<string, string> = {
 function cleanOneLine(text: string): string {
   const line = text.trim().split(/\n/)[0] ?? "";
   return line.replace(/^["']|["']$/g, "").slice(0, 120);
+}
+
+/** Last resort when the model returns empty (missing key, timeout, etc.). */
+function chipRewriteFallback(
+  current: string,
+  task: string,
+  path: string,
+  appName: string
+): string {
+  const t = task.toLowerCase();
+  const c = current.toLowerCase();
+  const isRoleDesc = path.includes("roles") && path.endsWith(".description");
+
+  if (isRoleDesc && /irresistible|tempting|appealing/.test(t)) {
+    if (/walk my|dog owner|owner|need someone/.test(c)) {
+      return "Post a walk and get matched fast.";
+    }
+    if (/walk dogs|walker|earn/.test(c)) {
+      return "Pick walks nearby and earn on your schedule.";
+    }
+    return `See why ${appName} fits you — tap to get started.`;
+  }
+  if (/crystal clear|who should pick|who it's for/.test(t) && isRoleDesc) {
+    if (/walk my|owner|need someone/.test(c)) {
+      return "For dog owners who need a reliable walker.";
+    }
+    if (/walk dogs|walker|earn/.test(c)) {
+      return "For people who want to walk dogs and earn.";
+    }
+  }
+  if (/shorter|fewer words/.test(t) && current.trim()) {
+    const words = current.trim().split(/\s+/);
+    if (words.length > 4) {
+      return words.slice(0, Math.min(6, Math.ceil(words.length * 0.7))).join(" ");
+    }
+  }
+  return "";
+}
+
+function fieldHint(path: string): string {
+  if (/\.description$/.test(path) && path.includes("roles")) {
+    return "role picker description (gray subtext under the role name)";
+  }
+  if (/\.label$/.test(path) && path.includes("roles")) {
+    return "role picker title (bold role name)";
+  }
+  if (/setupfields.*\.label$/.test(path)) return "form field label";
+  if (/setupfields.*\.placeholder$/.test(path)) return "form field placeholder";
+  if (/setupfields.*\.section$/.test(path)) return "form section header";
+  if (/setupfields.*\.options/.test(path)) return "form option label";
+  if (/herolabel|primaryaction|ctalabel|setupsubmitlabel/i.test(path)) return "button label";
+  if (/headline|setuptitle|welcometitle/i.test(path)) return "headline";
+  if (/subtitle|subheadline|sublabel|setupsubtitle/i.test(path)) return "subtext";
+  return "copy line";
+}
+
+async function rewriteLineCopy(
+  mp: MasterBuildPrompt,
+  coach: ReturnType<typeof buildPreviewCoachContext>,
+  path: string,
+  current: string,
+  task: string
+): Promise<string> {
+  const hint = fieldHint(path);
+  const system = appendCoachContext(
+    `You rewrite ONE ${hint} for the mobile app "${mp.appName}". ` +
+      `Output ONLY the new line — no quotes, labels, or explanation. Max 120 characters.`,
+    coach
+  );
+  const user =
+    `Current ${hint}:\n"${current}"\n\n` +
+    `Rewrite task: ${task}\n\n` +
+    `Write a different line that satisfies the task. Do not repeat the current line verbatim.`;
+
+  // flashChatComplete — same Qwen path as brainstorm (disables thinking, strips empty replies).
+  const { text } = await flashChatComplete(
+    [
+      { role: "system", content: system },
+      { role: "user", content: user },
+    ],
+    { temperature: 0.72, maxTokens: 160, timeoutMs: 35_000 }
+  );
+
+  let next = cleanOneLine(text);
+  if (!next.trim()) {
+    const retry = await flashChatComplete(
+      [
+        { role: "system", content: system },
+        {
+          role: "user",
+          content: `${user}\n\nReply with ONLY the rewritten line, nothing else.`,
+        },
+      ],
+      { temperature: 0.65, maxTokens: 200, timeoutMs: 40_000 }
+    );
+    next = cleanOneLine(retry.text);
+  }
+  if (!next.trim()) {
+    next = chipRewriteFallback(current, task, path, mp.appName);
+  }
+  return next;
 }
 
 function bumpAccent(hex: string): string {
@@ -181,29 +283,37 @@ export async function applySelectionTweak(
     };
   }
 
-  const tone = TONE[action.type];
-  if (!tone || !current) {
-    return { model, reply: "Nothing to rewrite here." };
+  const task =
+    action.type === "rewrite_with"
+      ? action.instruction.trim()
+      : TONE[action.type as keyof typeof TONE];
+
+  if (!task || !current.trim()) {
+    return {
+      model,
+      reply:
+        action.type === "rewrite_with" && !action.instruction.trim()
+          ? "Type what you want first."
+          : "Nothing to rewrite here — tap the text in the preview first.",
+    };
   }
 
-  const rewritten = await chatReply(
-    appendCoachContext(
-      `You edit ONE line of copy for the mobile app "${mp.appName}". ${tone} ` +
-        `Return ONLY the new line — no quotes, no explanation. Match the audience and product.`,
-      coach
-    ),
-    `Field: ${path}\nCurrent: ${current}`,
-    80
-  );
-
-  const next = cleanOneLine(rewritten) || current;
-  if (next.trim() === current.trim()) {
+  const next = await rewriteLineCopy(mp, coach, path, current.trim(), task);
+  if (!next.trim()) {
+    return {
+      model,
+      reply: "Rewrite didn't come through — try again or use the custom box below.",
+    };
+  }
+  if (next.trim().toLowerCase() === current.trim().toLowerCase()) {
     const hint =
       action.type === "rewrite_shorter"
-        ? "Already pretty short for this line."
+        ? "Already pretty short — try custom wording below."
         : action.type === "rewrite_friendly"
           ? "Already friendly enough."
-          : "Already polished enough.";
+          : action.type === "rewrite_pro"
+            ? "Already polished enough."
+            : "Got the same line back — try the custom box with specifics.";
     return { model, reply: hint };
   }
   const updated = setStringAtPath(model, path, next);

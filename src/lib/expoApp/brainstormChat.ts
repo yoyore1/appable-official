@@ -12,8 +12,7 @@ import {
   isGenericBrainstormReply,
   retrieveBrainstormContext,
 } from "./brainstormRetrieve";
-import { isBackendBuildRequest } from "./applyTweak";
-import { buildCopyUpdateFromCoach } from "./resolveBuildIntent";
+import { finalizeBrainstormWorkOrder } from "./brainstormWorkOrder";
 import type { ReadinessItem } from "./readinessAudit";
 import { auditAppReadiness, type AppReadinessAudit } from "./readinessAudit";
 import type { ExpoAppModel } from "./types";
@@ -45,7 +44,12 @@ const COACH_VOICE =
   "**Build** executes: preview UI, Supabase tables (messaging, auth), and wiring. " +
   "Accounts/data → **Supabase** in Connections, then user switches to **Build** to wire sign-up + sign-in or messaging. " +
   "Paid features → **RevenueCat** after Supabase. Do not suggest RevenueCat for free apps. " +
-  "Google + Apple sign-in guides live under Connections. Never paste API keys in chat.";
+  "Google + Apple sign-in guides live under Connections. Never paste API keys in chat. " +
+  "**Copy & UX:** Coach copy like a senior product writer — quote the problem, propose exact replacement text in quotes, explain WHY for this app. " +
+  "On follow-ups (shorter, simpler, clearer, who is this for): keep that structure — never collapse to just the quote. " +
+  "When copy is finalized, end with tap **Build** — do NOT ask 'Want to update?' again. " +
+  "Reply briefly ONLY when the user confirms Build with yes/ok/do it — not when they ask for another draft. " +
+  "Only mention integrations when they explicitly ask — never at the end of copy talk.";
 
 const TIRED_OPENER_RE =
   /^(oh,?\s*i get it|here'?s the thing|yeah,?\s*i get it|got it,?)\b/i;
@@ -152,40 +156,43 @@ async function refreshBrainstormSummary(
 async function detectBuildSuggestion(
   mp: MasterBuildPrompt,
   userMessage: string,
-  assistantReply: string
+  assistantReply: string,
+  previewModel: ExpoAppModel | null | undefined,
+  history: BrainstormTurn[]
 ): Promise<BrainstormBuildSuggestion | null> {
+  if (previewModel) {
+    const workOrder = finalizeBrainstormWorkOrder({
+      history,
+      model: previewModel,
+      appName: mp.appName,
+      coachText: assistantReply,
+      userMessage,
+    });
+    if (workOrder) return workOrder;
+  }
+
   const { text } = await flashChatComplete(
     [
       {
         role: "system",
         content:
-          `JSON only. Does the coach reply tell the user to switch to Build for a CONCRETE preview/UI change in ${mp.appName}? ` +
-          `{"suggest":false} OR {"suggest":true,"label":"short","prompt":"build instruction from THIS exchange only"}. ` +
-          `suggest:false if user only said yes/ok, or topic is backend/legal/database/Supabase only. ` +
-          `prompt must match what was just discussed — never a different checklist item.`,
+          `JSON only. Backend-only work (Supabase tables, legal, no preview UI copy)? ` +
+          `{"suggest":false} OR {"suggest":true,"label":"Build","prompt":"short backend instruction"}. ` +
+          `suggest:false for preview copy — that is handled separately.`,
       },
       {
         role: "user",
         content: `User: ${userMessage}\nCoach: ${assistantReply}`,
       },
     ],
-    { temperature: 0.2, maxTokens: 100, timeoutMs: 12_000 }
+    { temperature: 0.2, maxTokens: 80, timeoutMs: 10_000 }
   );
 
   const suggestion = parseBuildSuggestionJson(text);
-  if (suggestion && isBackendBuildRequest(suggestion.prompt)) return null;
-
-  if (!suggestion?.suggest) {
-    const copyPrompt = buildCopyUpdateFromCoach(assistantReply);
-    if (copyPrompt && /ready to update|switch to build|build (mode|tab)|update the (onboarding|copy|preview)/i.test(assistantReply)) {
-      return {
-        suggest: true,
-        label: "Update copy",
-        prompt: copyPrompt,
-      };
-    }
+  if (!suggestion?.prompt) return null;
+  if (/copy|subtitle|wording|headline|welcome|role picker|replace/i.test(suggestion.prompt)) {
+    return null;
   }
-
   return suggestion;
 }
 
@@ -230,6 +237,7 @@ export async function runBrainstormChat(
   const system = buildSystemPrompt(mp, contextBlock, history);
   const longForm =
     retrieved.intent === "full_walkthrough" ||
+    retrieved.intent === "copy_coaching" ||
     isDeepBrainstormMessage(message, history);
 
   const messages = buildMessages(system, history, message.trim());
@@ -241,7 +249,7 @@ export async function runBrainstormChat(
       buildMessages(
         system +
           "\n\nYour last reply was rejected — too generic, a checklist dump, or implied you can see their screen. " +
-          `Reply again: ONLY about "${retrieved.focusItems[0]?.title ?? message}" for ${mp.appName}. ` +
+          `Reply again: ONLY about "${retrieved.tapScope?.target.label ?? retrieved.focusItems[0]?.title ?? message}" for ${mp.appName}. ` +
           "Refer to the app design / build plan — never 'you're looking at'. Engineer coffee-chat tone.",
         history,
         message.trim()
@@ -258,7 +266,7 @@ export async function runBrainstormChat(
 
   const [nextSummary, buildSuggestion] = await Promise.all([
     refreshBrainstormSummary(mp, summary, message, reply),
-    detectBuildSuggestion(mp, message, reply),
+    detectBuildSuggestion(mp, message, reply, previewModel, history),
   ]);
 
   return { reply, buildSuggestion, summary: nextSummary };

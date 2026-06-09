@@ -1,7 +1,7 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { Loader2, Wand2, X } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
+import { ArrowUp, Loader2, Wand2, X } from "lucide-react";
 import type { TweakTarget } from "@/lib/expoApp/tweakPaths";
 import { PreviewMediaPick } from "@/components/PreviewMediaPick";
 import {
@@ -12,32 +12,52 @@ import {
   supportsImageSwap,
 } from "@/lib/expoApp/tweakPaths";
 import type { SelectionTweakAction } from "@/lib/expoApp/applySelectionTweak";
-import type { MasterBuildPrompt } from "@/lib/types";
+import { buildPreviewCoachContext } from "@/lib/expoApp/previewCoachContext";
+import { getTapToAskSuggestions } from "@/lib/expoApp/tapToAsk";
+import type { ExpoAppModel } from "@/lib/expoApp/types";
+import type { InterviewTurn, MasterBuildPrompt } from "@/lib/types";
 
 export function PreviewFixPanel({
   target,
   currentValue,
+  model,
   roleSibling,
   plan,
+  interview = [],
   busy,
+  statusMessage,
   onClose,
   onApply,
 }: {
   target: TweakTarget;
   currentValue: string;
+  model: ExpoAppModel;
   /** Other role-picker line (title vs gray description). */
   roleSibling?: { path: string; label: string; value: string };
   plan?: MasterBuildPrompt;
+  interview?: InterviewTurn[];
   busy?: boolean;
+  statusMessage?: string | null;
   onClose: () => void;
   onApply: (action: SelectionTweakAction, path?: string) => void;
 }) {
   const [draft, setDraft] = useState(currentValue);
   const [siblingDraft, setSiblingDraft] = useState(roleSibling?.value ?? "");
+  const [customInstruction, setCustomInstruction] = useState("");
   const roleField = target.path.match(/^flow\.roles\[\d+\]\.(label|description)$/)?.[1];
+
+  const coach = useMemo(
+    () => (plan ? buildPreviewCoachContext(plan, interview, model) : null),
+    [plan, interview, model]
+  );
+  const suggestions = useMemo(
+    () => getTapToAskSuggestions(model, target, coach),
+    [model, target, coach]
+  );
 
   useEffect(() => {
     setDraft(currentValue);
+    setCustomInstruction("");
   }, [target.path, currentValue]);
 
   useEffect(() => {
@@ -47,11 +67,10 @@ export function PreviewFixPanel({
   const isMedia = isMediaTarget(target);
   const isColor = supportsColorTweak(target.path) && !isMedia;
   const colorValue = /^#[0-9A-Fa-f]{6}$/.test(draft.trim()) ? draft.trim() : currentValue;
-  const wordCount = (s: string) => s.trim().split(/\s+/).filter(Boolean).length;
-  const rewritePath =
-    roleSibling && wordCount(roleSibling.value) > wordCount(currentValue)
-      ? roleSibling.path
-      : target.path;
+  function applyRewrite(instruction: string) {
+    if (!instruction.trim()) return;
+    onApply({ type: "rewrite_with", instruction: instruction.trim() }, target.path);
+  }
 
   return (
     <div className="rounded-2xl border border-coral/30 bg-white p-3 shadow-soft">
@@ -143,51 +162,79 @@ export function PreviewFixPanel({
       )}
 
       {!isColor && !isMedia && (
-        <div className="mt-2 flex flex-wrap gap-1.5">
-          <QuickBtn
-            label="Shorter"
-            disabled={busy}
-            onClick={() => onApply({ type: "rewrite_shorter" }, rewritePath)}
-          />
-          <QuickBtn
-            label="Friendlier"
-            disabled={busy}
-            onClick={() => onApply({ type: "rewrite_friendly" }, rewritePath)}
-          />
-          <QuickBtn
-            label="More pro"
-            disabled={busy}
-            onClick={() => onApply({ type: "rewrite_pro" }, rewritePath)}
-          />
-          {supportsAccentTweak(target.path) && (
-            <QuickBtn
-              label="Brighter color"
-              disabled={busy}
-              onClick={() => onApply({ type: "accent_brighter" })}
-            />
-          )}
-          {supportsImageSwap(target.path) && (
-            <QuickBtn
-              label="New photo"
-              disabled={busy}
-              onClick={() => onApply({ type: "swap_image" })}
-            />
-          )}
-          {canRemovePath(target.path) && (
-            <QuickBtn
-              label="Remove"
-              disabled={busy}
-              danger
-              onClick={() => onApply({ type: "remove" })}
-            />
-          )}
+        <div className="mt-2 space-y-1.5">
+          <div className="flex flex-col gap-1">
+            {suggestions.map((s) =>
+              s.rewriteInstruction ? (
+                <QuickBtn
+                  key={s.id}
+                  label={s.label}
+                  block
+                  disabled={busy}
+                  onClick={() => applyRewrite(s.rewriteInstruction!)}
+                />
+              ) : null
+            )}
+            <div className="flex items-center gap-2 rounded-xl border border-line/40 px-2 py-1.5 focus-within:border-coral/40">
+              <input
+                value={customInstruction}
+                onChange={(e) => setCustomInstruction(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    e.preventDefault();
+                    applyRewrite(customInstruction);
+                    setCustomInstruction("");
+                  }
+                }}
+                disabled={busy}
+                placeholder="Or describe what you want…"
+                className="min-w-0 flex-1 border-0 bg-transparent px-1 py-1 text-[11px] text-charcoal outline-none placeholder:text-warmgrey/80"
+              />
+              <button
+                type="button"
+                disabled={busy || !customInstruction.trim()}
+                onClick={() => {
+                  applyRewrite(customInstruction);
+                  setCustomInstruction("");
+                }}
+                className="grid h-7 w-7 shrink-0 place-items-center rounded-lg bg-gradient-to-br from-coral to-[#ff6b54] text-white disabled:opacity-40"
+                aria-label="Apply custom rewrite"
+              >
+                <ArrowUp className="h-3.5 w-3.5" />
+              </button>
+            </div>
+          </div>
+          <div className="flex flex-wrap gap-1.5">
+            {supportsAccentTweak(target.path) && (
+              <QuickBtn
+                label="Brighter color"
+                disabled={busy}
+                onClick={() => onApply({ type: "accent_brighter" })}
+              />
+            )}
+            {supportsImageSwap(target.path) && (
+              <QuickBtn
+                label="New photo"
+                disabled={busy}
+                onClick={() => onApply({ type: "swap_image" })}
+              />
+            )}
+            {canRemovePath(target.path) && (
+              <QuickBtn
+                label="Remove"
+                disabled={busy}
+                danger
+                onClick={() => onApply({ type: "remove" })}
+              />
+            )}
+          </div>
         </div>
       )}
 
-      {busy && (
+      {busy && statusMessage && (
         <p className="mt-2 flex items-center gap-1.5 text-xs text-warmgrey">
-          <Loader2 className="h-3 w-3 animate-spin" />
-          Updating preview…
+          <Loader2 className="h-3 w-3 animate-spin text-coral" />
+          {statusMessage}
         </p>
       )}
     </div>
@@ -239,24 +286,28 @@ function QuickBtn({
   onClick,
   disabled,
   danger,
+  block,
 }: {
   label: string;
   onClick: () => void;
   disabled?: boolean;
   danger?: boolean;
+  block?: boolean;
 }) {
   return (
     <button
       type="button"
       disabled={disabled}
       onClick={onClick}
-      className={`inline-flex items-center gap-1 rounded-lg border px-2.5 py-1 text-[11px] font-semibold transition disabled:opacity-50 ${
-        danger
-          ? "border-red-200 text-red-600 hover:bg-red-50"
-          : "border-line text-charcoal hover:border-coral/40 hover:bg-cream"
+      className={`inline-flex items-center gap-2 text-[11px] font-medium transition disabled:opacity-50 ${
+        block
+          ? "w-full rounded-xl border border-line/40 px-3 py-2 text-left text-charcoal hover:border-coral/35 hover:bg-cream/70"
+          : danger
+            ? "rounded-lg border border-red-200 px-2.5 py-1 text-red-600 hover:bg-red-50"
+            : "rounded-lg border border-line px-2.5 py-1 text-charcoal hover:border-coral/40 hover:bg-cream"
       }`}
     >
-      {!danger && <Wand2 className="h-3 w-3 text-coral" />}
+      {!danger && <Wand2 className={`shrink-0 text-coral ${block ? "h-3.5 w-3.5" : "h-3 w-3"}`} />}
       {label}
     </button>
   );

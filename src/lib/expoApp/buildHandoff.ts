@@ -1,15 +1,6 @@
-import type { BrainstormTurn } from "@/lib/types";
-
-const BUILD_SWITCH_RE =
-  /\b(switch|flip|head|move|jump|go)\s+(to|over to)\s+\*?\*?build\*?\*?|\b(use|try|open)\s+\*?\*?build\*?\*?\s+(mode|tab)?|\bin\s+\*?\*?build\*?\*?\s*(mode|tab)?\b|\btap\s+\*?\*?build\*?\*?\b|\bclick\s+\*?\*?build\*?\*?\b|\b\*\*build\*\*\s+tab\b/i;
-
-const SHORT_ACK_RE =
-  /^(yes|yeah|yep|yup|ok|okay|sure|do it|please|sounds good|let'?s do it|go ahead|perfect)\.?!?$/i;
-
-/** Coach told the user to switch to Build tab. */
-export function replySuggestsBuildSwitch(text: string): boolean {
-  return BUILD_SWITCH_RE.test(text);
-}
+import type { BrainstormBuildSuggestion, BrainstormTurn } from "@/lib/types";
+import type { ExpoAppModel } from "./types";
+import { compileBuildHandoff } from "./compileBuildHandoff";
 
 function lastBrainstormTurn(
   history: BrainstormTurn[],
@@ -21,59 +12,72 @@ function lastBrainstormTurn(
   return null;
 }
 
-/** Turn the latest brainstorm exchange into a Build-mode instruction. */
-export function buildPromptFromExchange(
+/** Build prompt for the floating Build chip — pending suggestion or compiled thread. */
+export function buildPromptForFloatingBuild(
   history: BrainstormTurn[],
-  assistantReply: string
+  pendingBuild?: BrainstormBuildSuggestion | null,
+  model?: ExpoAppModel | null,
+  appName?: string
 ): string {
-  const lastUser = lastBrainstormTurn(history, "user")?.trim() ?? "";
-
-  if (lastUser.length >= 12 && !SHORT_ACK_RE.test(lastUser)) {
-    return lastUser;
+  if (!model) {
+    if (pendingBuild?.prompt?.trim()) return pendingBuild.prompt.trim();
+    const lastAssistant = lastBrainstormTurn(history, "assistant")?.trim() ?? "";
+    if (lastAssistant) return lastAssistant.slice(0, 500);
+    const lastUser = lastBrainstormTurn(history, "user")?.trim();
+    if (lastUser && lastUser.length >= 8) return lastUser;
+    return "Apply what we discussed in brainstorm.";
   }
 
-  const cleaned = assistantReply
-    .replace(/\*\*/g, "")
-    .replace(/\b(switch|flip|head|go)\s+(to|over to)\s+build[^.?\n]*/gi, "")
-    .replace(/\b(use|try|tap|click)\s+build[^.?\n]*/gi, "")
-    .trim();
-
-  const lines = cleaned
-    .split(/\n+/)
-    .map((l) => l.trim())
-    .filter(
-      (l) =>
-        l.length > 12 &&
-        !/^switch|^tap|^go to|^when you|^let me know/i.test(l) &&
-        !/connections|supabase|checklist/i.test(l)
-    );
-
-  const body = lines.slice(0, 3).join(" ").replace(/\s+/g, " ").trim();
-
-  if (body.length > 24) {
-    return `Update the app preview with what we just planned: ${body.slice(0, 320)}`;
-  }
-
-  return "Update the app preview with what we just discussed in this chat.";
+  const compiled = compileBuildHandoff({
+    history,
+    model,
+    appName: appName ?? model.profile?.displayName,
+    pendingBuild,
+  });
+  return compiled.displayPrompt;
 }
 
-/** Floating Build CTA — only when coach mentions Build, prompt from this thread. */
+/** Floating Build CTA — always available in brainstorm once there is a thread. */
 export function resolveBuildHandoff(input: {
   history: BrainstormTurn[];
-  assistantReply?: string | null;
-}): { show: boolean; label: string; prompt: string } | null {
-  const assistant =
-    input.assistantReply?.trim() ||
-    lastBrainstormTurn(input.history, "assistant") ||
-    "";
+  pendingBuild?: BrainstormBuildSuggestion | null;
+  model?: ExpoAppModel | null;
+  appName?: string;
+}): {
+  label: string;
+  prompt: string;
+  displayPrompt: string;
+  patches: import("@/lib/types").BuildPatchOp[];
+  intent: import("@/lib/types").BuildHandoffIntent;
+} | null {
+  if (input.history.length < 2) return null;
 
-  if (!replySuggestsBuildSwitch(assistant)) return null;
+  if (!input.model) {
+    const prompt = buildPromptForFloatingBuild(input.history, input.pendingBuild);
+    if (!prompt.trim()) return null;
+    return {
+      label: "Build",
+      prompt,
+      displayPrompt: prompt,
+      patches: input.pendingBuild?.patches ?? [],
+      intent: input.pendingBuild?.intent ?? "generic",
+    };
+  }
 
-  const prompt = buildPromptFromExchange(input.history, assistant);
+  const compiled = compileBuildHandoff({
+    history: input.history,
+    model: input.model,
+    appName: input.appName ?? input.model.profile?.displayName,
+    pendingBuild: input.pendingBuild,
+  });
+
+  if (!compiled.displayPrompt.trim() && !compiled.patches.length) return null;
 
   return {
-    show: true,
-    label: "Build it",
-    prompt,
+    label: "Build",
+    prompt: compiled.applyPrompt,
+    displayPrompt: compiled.displayPrompt,
+    patches: compiled.patches,
+    intent: compiled.intent,
   };
 }

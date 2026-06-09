@@ -78,10 +78,10 @@ export const MARKETPLACE_CATALOG: MarketplaceConnectorBase[] = [
     connectable: true,
     suggestPriority: 1,
     featurePatterns: [
-      /sign[\s-]?in|sign[\s-]?up|log[\s-]?in|register|account|auth|password/i,
-      /database|backend|supabase|cloud sync|save.*device/i,
-      /profile|user data|owner|walker|role|two.?sided|marketplace/i,
-      /message|chat|inbox/i,
+      /\bsupabase\b/i,
+      /wire\s+(auth|messaging|database|backend)|connect\s+(supabase|backend|database)/i,
+      /database\s+schema|create\s+(the\s+)?tables?|real[\s-]?time\s+data/i,
+      /sign[\s-]?up\s+and\s+sign[\s-]?in|supabase\s+auth|cloud\s+sync|save\s+to\s+(the\s+)?cloud/i,
     ],
   },
   {
