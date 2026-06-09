@@ -377,3 +377,84 @@ export async function getConnectorWebhookSecrets(projectId: string): Promise<
 
   return { ok: true, ...out };
 }
+
+/** Opt-in: founder adds or removes an integration from their project plan. */
+export async function setMarketplaceSelection(
+  projectId: string,
+  connectorId: import("@/lib/connectors/catalog").ConnectorId,
+  selected: boolean
+): Promise<
+  | { ok: true; selections: import("@/lib/connectors/catalog").ConnectorId[] }
+  | { ok: false; message: string }
+> {
+  const access = await resolveProjectAccess(projectId);
+  if (!access.ok) return { ok: false, message: "Project not found." };
+
+  const { getCatalogEntry } = await import("@/lib/connectors/catalog");
+  getCatalogEntry(connectorId);
+
+  const current = access.project.marketplaceSelections ?? [];
+  const next = selected
+    ? current.includes(connectorId)
+      ? current
+      : [...current, connectorId]
+    : current.filter((id) => id !== connectorId);
+
+  await db.updateProject(projectId, { marketplaceSelections: next });
+  revalidatePath(`/project/${projectId}/expo`);
+
+  return { ok: true, selections: next };
+}
+
+/** Connect a marketplace SDK integration (API keys stored encrypted). */
+export async function connectSdkIntegration(
+  projectId: string,
+  connectorId: import("@/lib/connectors/catalog").ConnectorId,
+  values: Record<string, string>
+): Promise<
+  | { ok: true; connector: import("@/lib/types").SdkConnectorPublic }
+  | { ok: false; message: string }
+> {
+  const access = await resolveProjectAccess(projectId);
+  if (!access.ok) return { ok: false, message: "Project not found." };
+
+  const { getConnectorConnectionType } = await import("@/lib/connectors/sdkCatalog");
+  if (getConnectorConnectionType(connectorId) !== "sdk") {
+    return { ok: false, message: "This integration does not use the SDK connect flow." };
+  }
+
+  try {
+    const { linkSdkConnector } = await import("@/lib/connectors/sdkConnector");
+    const linked = linkSdkConnector(connectorId, values);
+    const sdkConnectors = {
+      ...(access.project.sdkConnectors ?? {}),
+      [connectorId]: linked,
+    };
+    const selections = new Set(access.project.marketplaceSelections ?? []);
+    selections.add(connectorId);
+    await db.updateProject(projectId, {
+      sdkConnectors,
+      marketplaceSelections: [...selections],
+    });
+    revalidatePath(`/project/${projectId}/expo`);
+    return { ok: true, connector: linked.public };
+  } catch (e) {
+    const message = e instanceof Error ? e.message : "Could not save keys.";
+    return { ok: false, message };
+  }
+}
+
+export async function disconnectSdkIntegration(
+  projectId: string,
+  connectorId: import("@/lib/connectors/catalog").ConnectorId
+): Promise<{ ok: true } | { ok: false; message: string }> {
+  const access = await resolveProjectAccess(projectId);
+  if (!access.ok) return { ok: false, message: "Project not found." };
+
+  const sdkConnectors = { ...(access.project.sdkConnectors ?? {}) };
+  delete sdkConnectors[connectorId];
+
+  await db.updateProject(projectId, { sdkConnectors });
+  revalidatePath(`/project/${projectId}/expo`);
+  return { ok: true };
+}

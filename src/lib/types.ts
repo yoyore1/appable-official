@@ -170,6 +170,22 @@ export interface ProjectRailwayConnector {
   apiTokenEnc: string;
 }
 
+export type SdkConnectorStatus = "connected" | "disconnected";
+
+export interface SdkConnectorPublic {
+  status: SdkConnectorStatus;
+  connectedAt: string;
+  /** Masked or truncated field previews — safe for client UI */
+  hints: Record<string, string>;
+  /** Reports-tier keys on file — weekly insights can run in Appable. */
+  reportsReady?: boolean;
+}
+
+export interface ProjectSdkConnector {
+  public: SdkConnectorPublic;
+  secretsEnc: Record<string, string>;
+}
+
 export interface Project {
   id: string;
   userId: string;
@@ -204,6 +220,14 @@ export interface Project {
   revenueCatConnector?: ProjectRevenueCatConnector | null;
   /** Linked Railway project — custom API / worker hosting. */
   railwayConnector?: ProjectRailwayConnector | null;
+  /** Integrations explicitly added from the marketplace (opt-in — never auto-filled). */
+  marketplaceSelections?: import("@/lib/connectors/catalog").ConnectorId[];
+  /** Generic SDK / API-key integrations (PostHog, Sentry, …). */
+  sdkConnectors?: Partial<
+    Record<import("@/lib/connectors/catalog").ConnectorId, ProjectSdkConnector>
+  >;
+  /** Weekly integration insights — snapshots, onboarding, privacy ack. */
+  insightsState?: import("@/lib/insights/types").ProjectInsightsState | null;
   /** Guest-session AI spend (merged to user on claim). */
   aiUsageUsd?: number;
   createdAt: string;

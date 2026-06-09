@@ -13,9 +13,11 @@ import {
   retrieveBrainstormContext,
 } from "./brainstormRetrieve";
 import { isBackendBuildRequest } from "./applyTweak";
+import { buildCopyUpdateFromCoach } from "./resolveBuildIntent";
 import type { ReadinessItem } from "./readinessAudit";
 import { auditAppReadiness, type AppReadinessAudit } from "./readinessAudit";
 import type { ExpoAppModel } from "./types";
+import { founderVoiceBlock } from "./founderVoice";
 
 export type { BrainstormTurn } from "@/lib/types";
 
@@ -37,7 +39,8 @@ const COACH_VOICE =
   "'those slides on your screen', or anything that implies a shared viewport. " +
   "Talk about what the **app design** includes vs what still needs real wiring. " +
   "Plain English — define jargon in one line. " +
-  "Follow **CONNECTOR ROUTING** in context — only suggest connectors the app actually needs. " +
+  "Follow **INTEGRATION MARKETPLACE** and **INTEGRATION IMPLEMENTATION PLAYBOOKS** in context — explain how each fits THIS app; never auto-add integrations. " +
+  "When explaining an integration, always start with whether they need to **create an account or log in** (give the site), then where to copy keys into **Integrations**. " +
   "**Brainstorm plans only** — you do NOT change the preview or run SQL. " +
   "**Build** executes: preview UI, Supabase tables (messaging, auth), and wiring. " +
   "Accounts/data → **Supabase** in Connections, then user switches to **Build** to wire sign-up + sign-in or messaging. " +
@@ -84,6 +87,7 @@ function buildSystemPrompt(
   const openerHint = tiredOpenersFromHistory(history);
   return (
     `${COACH_VOICE}\n\n` +
+    `${founderVoiceBlock(mp.appName)}\n\n` +
     `App: ${mp.appName}\n\n` +
     retrievedContext +
     (openerHint ? `\n\n--- Opener rule ---\n${openerHint}` : "")
@@ -170,6 +174,18 @@ async function detectBuildSuggestion(
 
   const suggestion = parseBuildSuggestionJson(text);
   if (suggestion && isBackendBuildRequest(suggestion.prompt)) return null;
+
+  if (!suggestion?.suggest) {
+    const copyPrompt = buildCopyUpdateFromCoach(assistantReply);
+    if (copyPrompt && /ready to update|switch to build|build (mode|tab)|update the (onboarding|copy|preview)/i.test(assistantReply)) {
+      return {
+        suggest: true,
+        label: "Update copy",
+        prompt: copyPrompt,
+      };
+    }
+  }
+
   return suggestion;
 }
 

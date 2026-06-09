@@ -27,6 +27,11 @@ import { buildTheme } from "./theme";
 import { trackLlmCost } from "@/lib/aiBillingContext";
 import { parseDeepInfraCost, type AiChatResult } from "@/lib/deepinfraCost";
 import { completeAuthFlow } from "./authFlowDefaults";
+import {
+  auditCapabilities,
+  capabilityGapsToCritiqueIssues,
+  runCapabilityReview,
+} from "./capabilities";
 import type { ExpoAppModel, ExpoAppModelInput } from "./types";
 
 function parseJsonFromText<T>(text: string): T | null {
@@ -423,7 +428,23 @@ export async function buildExpoAppModel(
       tick(3, "Checking quality…");
       let critique = critiqueExpoApp(input, interview, mp);
       const enrichGaps = collectEnrichGaps(input, mp, interview);
-      const allIssues = [...critique.issues, ...enrichGaps];
+      const capProbe = inferAppCapabilities(mp, interview);
+      const draftForCap: ExpoAppModel = {
+        version: 1,
+        ...input,
+        theme: buildTheme(mp),
+        capabilities: {
+          enabled: capProbe.capabilities,
+          uiFeatures: buildPreviewUiConfig(mp, interview).features,
+          heroAction: input.home.heroLabel || capProbe.heroAction,
+          heroSublabel: input.home.heroSublabel || capProbe.heroSublabel,
+          visionPrompt: capProbe.visionPrompt,
+        },
+      };
+      const capIssues = capabilityGapsToCritiqueIssues(
+        auditCapabilities(draftForCap, mp, interview)
+      );
+      const allIssues = [...critique.issues, ...enrichGaps, ...capIssues.slice(0, 8)];
       if (allIssues.length) {
         tick(4, "Polishing details…");
         const refined = await refineWithLlm(mp, input, allIssues, projectId, interview);
@@ -458,7 +479,10 @@ export async function buildExpoAppModel(
   tick(5, `Applying ${mp.vibe.toLowerCase()} style & tailored fonts…`);
   tick(6, "Wiring button interactions…");
   input = await ensureActionPlan(input, mp, interview);
-  const model = finalize(input, mp, interview);
+  let model = finalize(input, mp, interview);
+  tick(6, "Checking every feature is complete…");
+  const reviewed = runCapabilityReview(model, mp, interview);
+  model = reviewed.model;
   tick(7);
 
   if (projectId) {

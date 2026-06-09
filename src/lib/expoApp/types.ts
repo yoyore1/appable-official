@@ -1,3 +1,4 @@
+import type { CapabilityAuditSnapshot } from "./capabilities/types";
 import type { MasterBuildPrompt, Vibe } from "@/lib/types";
 
 /** Lucide icon names used in tab bar + profile rows. */
@@ -148,10 +149,67 @@ export interface ExpoTab {
   icon: ExpoIconName;
 }
 
+/** UI pattern for web preview — maps to shared renderers (see components/preview). */
+export type PreviewPatternId =
+  | "list-browse"
+  | "content-detail"
+  | "inbox-threads"
+  | "cart-lines"
+  | "shop-grid"
+  | "collection-list"
+  | "checkout-summary"
+  | "feed-scroll"
+  | "booking-browse"
+  | "marketplace-browse"
+  | "habit-checklist"
+  | "notes-list"
+  | "home-dashboard";
+
+export interface ExpoThreadMessage {
+  id: string;
+  sender: "me" | "them";
+  senderLabel: string;
+  text: string;
+  at: string;
+}
+
+export interface ExpoMessageThread {
+  id: string;
+  participant: string;
+  participantAvatar?: string;
+  preview: string;
+  time: string;
+  unread?: boolean;
+  messages: ExpoThreadMessage[];
+}
+
+export interface ExpoCartLine {
+  id: string;
+  title: string;
+  price: string;
+  imageUrl: string;
+  qty: number;
+}
+
+/** Stateful preview data (threads, cart) — synced with pattern renderers. */
+export interface ExpoPreviewState {
+  threads?: ExpoMessageThread[];
+  cart?: ExpoCartLine[];
+}
+
+export interface ExpoPreviewPatterns {
+  tabs: Record<string, PreviewPatternId>;
+  /** Home tab pattern (hero + sections). */
+  home?: PreviewPatternId;
+  /** Detail overlay when opening a list item. */
+  detail?: PreviewPatternId;
+}
+
 export interface ExpoTabScreen {
   title: string;
   subtitle: string;
   items: ExpoListItem[];
+  patternId?: PreviewPatternId;
 }
 
 export interface ExpoAppTheme {
@@ -216,6 +274,12 @@ export interface ExpoAppModel {
   };
   theme: ExpoAppTheme;
   capabilities: ExpoAppCapabilities;
+  /** Last capability self-review (behavior + UX + UI) after build or tweak. */
+  capabilityAudit?: CapabilityAuditSnapshot;
+  /** Tab → UI pattern assignments from capability pipeline. */
+  previewPatterns?: ExpoPreviewPatterns;
+  /** Live preview state (chat threads, cart lines). */
+  previewState?: ExpoPreviewState;
 }
 
 export type ExpoAppModelInput = Omit<ExpoAppModel, "theme" | "version" | "capabilities">;

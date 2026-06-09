@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { ExternalLink, Loader2, X } from "lucide-react";
+import { APP_KEYS_INTRO, REPORTS_KEYS_INTRO } from "@/lib/connectors/credentialTiers";
 import { connectRevenueCatToProject } from "@/server/connectors";
 import type { RevenueCatConnectorPublic } from "@/lib/types";
 
@@ -104,8 +105,15 @@ export function RevenueCatConnectModal({
                 (server + webhooks).
               </li>
             </ol>
+            <p className="text-[10px] font-bold uppercase tracking-wide text-warmgrey">
+              In your exported app
+            </p>
+            <p className="text-[10px] leading-snug text-warmgrey">{APP_KEYS_INTRO}</p>
             <label className="block text-xs font-semibold text-charcoal">
               Public API key
+              <span className="mt-0.5 block text-[10px] font-normal text-warmgrey">
+                SDK in your app — offerings and purchase UI.
+              </span>
               <input
                 type="password"
                 autoComplete="off"
@@ -115,8 +123,16 @@ export function RevenueCatConnectModal({
                 className="mt-1 w-full rounded-xl border border-line/50 bg-white px-3 py-2.5 text-sm text-charcoal outline-none ring-coral/30 focus:ring-2"
               />
             </label>
+            <p className="pt-1 text-[10px] font-bold uppercase tracking-wide text-charcoal">
+              For Appable Reports
+            </p>
+            <p className="text-[10px] leading-snug text-warmgrey">{REPORTS_KEYS_INTRO}</p>
             <label className="block text-xs font-semibold text-charcoal">
               Secret API key
+              <span className="mt-0.5 block text-[10px] font-normal text-warmgrey">
+                Revenue, churn, and subscription charts in Reports — also used for Supabase
+                webhooks. Never goes in the client app.
+              </span>
               <input
                 type="password"
                 autoComplete="off"

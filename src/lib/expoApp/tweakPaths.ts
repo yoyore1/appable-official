@@ -87,6 +87,46 @@ export function supportsImageSwap(path: string): boolean {
   return /\.items\[\d+\]/.test(path) || path.endsWith(".imageUrl");
 }
 
+/** Icons & photos — upload from device, not color tweaks. */
+export function isMediaTarget(target: TweakTarget): boolean {
+  if (target.field === "icon" || target.field === "image") return true;
+  if (/\.emoji$/.test(target.path) || target.path.endsWith(".imageUrl")) return true;
+  return supportsImageSwap(target.path);
+}
+
+export function isImageUrlValue(value: string): boolean {
+  const v = value.trim();
+  return v.startsWith("data:image/") || /^https?:\/\//i.test(v);
+}
+
 export function supportsAccentTweak(path: string): boolean {
   return /heroLabel|heroSublabel|primaryAction|accent/.test(path);
+}
+
+export function supportsColorTweak(path: string): boolean {
+  return path.startsWith("theme.");
+}
+
+/** Opposite line on a role card (bold title vs gray description). */
+export function rolePickerSiblingField(
+  model: ExpoAppModel,
+  path: string
+): { path: string; label: string; value: string } | undefined {
+  const m = path.match(/^flow\.roles\[(\d+)\]\.(label|description)$/);
+  if (!m) return undefined;
+  const index = Number(m[1]);
+  const role = model.flow?.roles?.[index];
+  if (!role) return undefined;
+  if (m[2] === "label") {
+    return {
+      path: `flow.roles[${index}].description`,
+      label: "Description",
+      value: role.description ?? "",
+    };
+  }
+  return {
+    path: `flow.roles[${index}].label`,
+    label: "Role title",
+    value: role.label ?? "",
+  };
 }

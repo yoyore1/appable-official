@@ -99,6 +99,48 @@
       rgb(var(--cream) / 0.35);
   }
 
+  /* Edit mode — calm editor canvas behind the phone preview. */
+  .build-pane-mesh--editor {
+    background:
+      radial-gradient(ellipse 72% 58% at 50% 42%, rgb(255 255 255 / 0.92), transparent 72%),
+      linear-gradient(
+        180deg,
+        rgb(var(--sand) / 0.55) 0%,
+        rgb(var(--cream) / 0.45) 48%,
+        rgb(var(--sand) / 0.5) 100%
+      );
+  }
+
+  .preview-editor-stage {
+    pointer-events: none;
+  }
+
+  .preview-editor-stage__grid {
+    position: absolute;
+    inset: 0;
+    background-image: radial-gradient(rgb(var(--charcoal) / 0.07) 0.75px, transparent 0.75px);
+    background-size: 18px 18px;
+    mask-image: radial-gradient(ellipse 88% 78% at 50% 48%, black 25%, transparent 88%);
+    opacity: 0.55;
+  }
+
+  .preview-editor-stage__vignette {
+    position: absolute;
+    inset: 0;
+    box-shadow: inset 0 0 100px 24px rgb(var(--charcoal) / 0.035);
+  }
+
+  .preview-editor-stage__spotlight {
+    position: absolute;
+    inset: 12% 18%;
+    border-radius: 2rem;
+    background: radial-gradient(
+      ellipse 70% 65% at 50% 45%,
+      rgb(255 255 255 / 0.55),
+      transparent 72%
+    );
+  }
+
   .chat-panel-surface {
     background: linear-gradient(
       180deg,

@@ -18,6 +18,8 @@ import {
 import { AiBudgetBar } from "@/components/AiBudgetBar";
 import { Confetti } from "@/components/Confetti";
 import { TypingIndicator } from "@/components/TypingIndicator";
+import { VoiceMicButton } from "@/components/VoiceMicButton";
+import { useVoiceDictation } from "@/hooks/useVoiceDictation";
 
 type Bubble = {
   id: string;
@@ -465,6 +467,15 @@ export function Interview({
 
   const canAnswer = ready && Boolean(projectId);
 
+  const voice = useVoiceDictation({
+    projectId,
+    disabled: busy || !canAnswer,
+    onTranscript: (text) => {
+      setValue((prev) => (prev.trim() ? `${prev.trim()} ${text}` : text));
+      requestAnimationFrame(() => textareaRef.current?.focus());
+    },
+  });
+
   const showComposer =
     !building &&
     !buildFailed &&
@@ -739,15 +750,28 @@ export function Interview({
                       }
                     }
                   }}
-                  disabled={busy || !canAnswer}
+                  disabled={busy || !canAnswer || voice.transcribing}
                   placeholder={inputPlaceholder}
                   className="max-h-40 min-h-[2.25rem] w-full resize-none bg-transparent px-1 py-1 text-sm leading-snug text-charcoal outline-none placeholder:text-warmgrey"
                 />
-                <p className="mt-1.5 px-1 text-[10px] text-warmgrey">
-                  {multiPickStep
-                    ? "Press Enter to send your own list · or pick 2–3 above"
-                    : "Press Enter to send · tap any answer above to edit"}
-                </p>
+                <div className="mt-2 flex items-center justify-between gap-2 px-1">
+                  <p className="min-w-0 text-[10px] leading-snug text-warmgrey">
+                    {voice.error ??
+                      voice.statusLabel ??
+                      (multiPickStep
+                        ? "Enter to send · or pick 2–3 above · mic to talk"
+                        : "Enter to send · mic to talk")}
+                  </p>
+                  {voice.supported && (
+                    <VoiceMicButton
+                      size="sm"
+                      listening={voice.listening}
+                      transcribing={voice.transcribing}
+                      disabled={busy || !canAnswer}
+                      onClick={voice.toggle}
+                    />
+                  )}
+                </div>
               </form>
             )}
           </div>

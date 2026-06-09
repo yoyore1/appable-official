@@ -1,6 +1,7 @@
 import { chatReply } from "@/lib/models";
 import { imageForCategory } from "@/lib/expoApp/images";
-import type { MasterBuildPrompt } from "@/lib/types";
+import type { InterviewTurn, MasterBuildPrompt } from "@/lib/types";
+import { appendCoachContext, buildPreviewCoachContext } from "./previewCoachContext";
 import type { ExpoAppModel } from "./types";
 import {
   canRemovePath,
@@ -8,6 +9,7 @@ import {
   removeAtPath,
   setStringAtPath,
   supportsAccentTweak,
+  supportsColorTweak,
   supportsImageSwap,
 } from "./tweakPaths";
 
@@ -18,7 +20,11 @@ export type SelectionTweakAction =
   | { type: "rewrite_friendly" }
   | { type: "rewrite_pro" }
   | { type: "accent_brighter" }
-  | { type: "swap_image" };
+  | { type: "swap_image" }
+  | { type: "color_lighter" }
+  | { type: "color_darker" }
+  | { type: "color_warmer" }
+  | { type: "color_cooler" };
 
 const TONE: Record<string, string> = {
   rewrite_shorter: "Make it shorter — same meaning, fewer words.",
@@ -41,20 +47,106 @@ function bumpAccent(hex: string): string {
   return map[hex.toUpperCase()] ?? "#E85D48";
 }
 
+function parseHex(hex: string): [number, number, number] | null {
+  const m = hex.trim().match(/^#?([0-9A-Fa-f]{6})$/);
+  if (!m) return null;
+  const n = parseInt(m[1]!, 16);
+  return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+}
+
+function toHex(r: number, g: number, b: number): string {
+  const clamp = (v: number) => Math.max(0, Math.min(255, Math.round(v)));
+  return `#${[clamp(r), clamp(g), clamp(b)]
+    .map((v) => v.toString(16).padStart(2, "0"))
+    .join("")}`;
+}
+
+function shiftColor(hex: string, mode: "lighter" | "darker" | "warmer" | "cooler"): string {
+  const rgb = parseHex(hex);
+  if (!rgb) return hex;
+  let [r, g, b] = rgb;
+  if (mode === "lighter") {
+    r += (255 - r) * 0.12;
+    g += (255 - g) * 0.12;
+    b += (255 - b) * 0.12;
+  } else if (mode === "darker") {
+    r *= 0.88;
+    g *= 0.88;
+    b *= 0.88;
+  } else if (mode === "warmer") {
+    r += 14;
+    g += 4;
+    b -= 8;
+  } else {
+    r -= 8;
+    g += 2;
+    b += 14;
+  }
+  return toHex(r, g, b);
+}
+
 export async function applySelectionTweak(
   model: ExpoAppModel,
   mp: MasterBuildPrompt,
   path: string,
-  action: SelectionTweakAction
+  action: SelectionTweakAction,
+  interview: InterviewTurn[] = []
 ): Promise<{ model: ExpoAppModel; reply: string }> {
+  const coach = buildPreviewCoachContext(mp, interview, model);
   const current = getStringAtPath(model, path);
 
   if (action.type === "set") {
     const value = action.value.trim();
-    if (!value) return { model, reply: "Enter some text first." };
+    if (!value) {
+      return { model, reply: supportsColorTweak(path) ? "Pick a color first." : "Enter some text first." };
+    }
+    if (supportsColorTweak(path)) {
+      const normalized = value.startsWith("#") ? value : `#${value}`;
+      if (!parseHex(normalized)) return { model, reply: "That color didn't work — try again." };
+      return {
+        model: setStringAtPath(model, path, normalized.toUpperCase()),
+        reply: "Color updated in the preview.",
+      };
+    }
+    if (path.endsWith(".emoji")) {
+      return {
+        model: setStringAtPath(model, path, value),
+        reply: "Icon updated in the preview.",
+      };
+    }
+    if (path.endsWith(".imageUrl")) {
+      return {
+        model: setStringAtPath(model, path, value),
+        reply: "Image updated in the preview.",
+      };
+    }
+    const next = setStringAtPath(model, path, value);
+    if (getStringAtPath(next, path).trim() === current.trim()) {
+      if (value.trim() === current.trim()) {
+        return { model, reply: "Already says that — no change needed." };
+      }
+      return { model, reply: "Couldn't update that field — try tapping the text in the preview again." };
+    }
     return {
-      model: setStringAtPath(model, path, value),
+      model: next,
       reply: `Updated → "${value.slice(0, 48)}${value.length > 48 ? "…" : ""}"`,
+    };
+  }
+
+  if (
+    action.type === "color_lighter" ||
+    action.type === "color_darker" ||
+    action.type === "color_warmer" ||
+    action.type === "color_cooler"
+  ) {
+    if (!supportsColorTweak(path)) {
+      return { model, reply: "Tap a background or color block to change colors." };
+    }
+    const mode = action.type.replace("color_", "") as "lighter" | "darker" | "warmer" | "cooler";
+    const next = shiftColor(current || model.theme.accent, mode);
+    return {
+      model: setStringAtPath(model, path, next),
+      reply: "Color updated in the preview.",
     };
   }
 
@@ -95,15 +187,31 @@ export async function applySelectionTweak(
   }
 
   const rewritten = await chatReply(
-    `You edit ONE line of copy for the mobile app "${mp.appName}". ${tone} ` +
-      `Return ONLY the new line — no quotes, no explanation.`,
+    appendCoachContext(
+      `You edit ONE line of copy for the mobile app "${mp.appName}". ${tone} ` +
+        `Return ONLY the new line — no quotes, no explanation. Match the audience and product.`,
+      coach
+    ),
     `Field: ${path}\nCurrent: ${current}`,
     80
   );
 
   const next = cleanOneLine(rewritten) || current;
+  if (next.trim() === current.trim()) {
+    const hint =
+      action.type === "rewrite_shorter"
+        ? "Already pretty short for this line."
+        : action.type === "rewrite_friendly"
+          ? "Already friendly enough."
+          : "Already polished enough.";
+    return { model, reply: hint };
+  }
+  const updated = setStringAtPath(model, path, next);
+  if (getStringAtPath(updated, path).trim() !== next.trim()) {
+    return { model, reply: "Couldn't update that field — try tapping the text in the preview again." };
+  }
   return {
-    model: setStringAtPath(model, path, next),
+    model: updated,
     reply: `Now: "${next.slice(0, 56)}${next.length > 56 ? "…" : ""}"`,
   };
 }

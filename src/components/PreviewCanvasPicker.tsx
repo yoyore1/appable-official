@@ -2,8 +2,11 @@
 
 import { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
-import { Globe, Smartphone, X } from "lucide-react";
+import { BarChart3, Globe, Smartphone, X } from "lucide-react";
+import { ReportsPanel } from "@/components/ReportsPanel";
 import { AnimatePresence, motion } from "framer-motion";
+import { defaultInsightsState, type ProjectInsightsState } from "@/lib/insights/types";
+import type { Project } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
 type View = "app" | "website";
@@ -14,16 +17,47 @@ type View = "app" | "website";
  */
 export function PreviewCanvasPicker({
   appName,
+  projectId,
+  projectSlice,
+  initialInsightsState,
+  onInsightAsk,
+  onInsightBuild,
+  onInsightsStateChange,
   className,
 }: {
   appName: string;
+  projectId: string;
+  projectSlice: Pick<
+    Project,
+    | "masterPrompt"
+    | "expoAppModel"
+    | "supabaseConnector"
+    | "revenueCatConnector"
+    | "railwayConnector"
+    | "sdkConnectors"
+    | "marketplaceSelections"
+  >;
+  initialInsightsState?: ProjectInsightsState | null;
+  onInsightAsk?: (prompt: string) => void;
+  onInsightBuild?: (prompt: string, suggestionId: string) => void;
+  onInsightsStateChange?: (state: ProjectInsightsState) => void;
   className?: string;
 }) {
   const [view, setView] = useState<View>("app");
   const [websiteNote, setWebsiteNote] = useState(false);
+  const [reportsOpen, setReportsOpen] = useState(false);
   const [mounted, setMounted] = useState(false);
+  const [insightsState, setInsightsState] = useState<ProjectInsightsState>(
+    () => initialInsightsState ?? defaultInsightsState()
+  );
+
+  const slice = projectSlice;
 
   useEffect(() => setMounted(true), []);
+
+  useEffect(() => {
+    if (initialInsightsState) setInsightsState(initialInsightsState);
+  }, [initialInsightsState]);
 
   useEffect(() => {
     if (!websiteNote) return;
@@ -46,45 +80,80 @@ export function PreviewCanvasPicker({
 
   return (
     <>
-      <div
-        className={cn(
-          "inline-flex items-center rounded-lg border border-line/50 bg-white/90 p-0.5 shadow-sm backdrop-blur-sm",
-          className
-        )}
-        role="tablist"
-        aria-label="Preview type"
-      >
+      <div className={cn("flex flex-wrap items-center gap-1.5", className)}>
+        <div
+          className="inline-flex items-center rounded-lg border border-line/50 bg-white/90 p-0.5 shadow-sm backdrop-blur-sm"
+          role="tablist"
+          aria-label="Preview type"
+        >
+          <button
+            type="button"
+            role="tab"
+            aria-selected={view === "app"}
+            onClick={backToApp}
+            className={cn(
+              "inline-flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-xs font-semibold transition",
+              view === "app"
+                ? "bg-charcoal text-white shadow-sm"
+                : "text-warmgrey hover:text-charcoal"
+            )}
+          >
+            <Smartphone className="h-3.5 w-3.5" />
+            App
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={view === "website"}
+            onClick={onWebsiteClick}
+            className={cn(
+              "inline-flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-xs font-semibold transition",
+              view === "website"
+                ? "bg-charcoal text-white shadow-sm"
+                : "text-warmgrey hover:text-charcoal"
+            )}
+          >
+            <Globe className="h-3.5 w-3.5" />
+            Website
+          </button>
+        </div>
+
         <button
           type="button"
-          role="tab"
-          aria-selected={view === "app"}
-          onClick={backToApp}
+          onClick={() => {
+            setReportsOpen(true);
+            backToApp();
+          }}
           className={cn(
-            "inline-flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-xs font-semibold transition",
-            view === "app"
-              ? "bg-charcoal text-white shadow-sm"
-              : "text-warmgrey hover:text-charcoal"
+            "inline-flex items-center gap-1.5 rounded-lg border border-line/50 bg-white/90 px-2.5 py-[0.4375rem] text-xs font-semibold shadow-sm backdrop-blur-sm transition",
+            reportsOpen
+              ? "border-charcoal/25 bg-charcoal text-white"
+              : "text-warmgrey hover:border-line hover:text-charcoal"
           )}
+          aria-pressed={reportsOpen}
         >
-          <Smartphone className="h-3.5 w-3.5" />
-          App
-        </button>
-        <button
-          type="button"
-          role="tab"
-          aria-selected={view === "website"}
-          onClick={onWebsiteClick}
-          className={cn(
-            "inline-flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-xs font-semibold transition",
-            view === "website"
-              ? "bg-charcoal text-white shadow-sm"
-              : "text-warmgrey hover:text-charcoal"
-          )}
-        >
-          <Globe className="h-3.5 w-3.5" />
-          Website
+          <BarChart3 className="h-3.5 w-3.5" />
+          Reports
         </button>
       </div>
+
+      <ReportsPanel
+        open={reportsOpen}
+        onClose={() => setReportsOpen(false)}
+        appName={appName}
+        projectId={projectId}
+        projectSlice={slice}
+        initialState={insightsState}
+        onInsightAsk={onInsightAsk}
+        onInsightBuild={(prompt, id) => {
+          onInsightBuild?.(prompt, id);
+          setReportsOpen(false);
+        }}
+        onStateChange={(next) => {
+          setInsightsState(next);
+          onInsightsStateChange?.(next);
+        }}
+      />
 
       {mounted &&
         createPortal(

@@ -62,6 +62,19 @@ export function appendBrainstormTurn(
   return { ...state, history: next };
 }
 
+/** Drop edited turn and everything after (Claude-style edit & resend). */
+export function truncateBrainstormHistory(
+  state: ProjectBrainstormState,
+  turnIndex: number
+): ProjectBrainstormState {
+  const safe = Math.max(0, Math.min(turnIndex, state.history.length));
+  return {
+    ...state,
+    history: state.history.slice(0, safe),
+    pendingBuild: null,
+  };
+}
+
 export function summarizeReadinessForBuild(
   items: ReadinessItem[],
   state: ProjectReadinessState | null | undefined

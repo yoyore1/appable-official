@@ -52,6 +52,25 @@ export function summarizeBuiltState(model: ExpoAppModel): string {
 
   lines.push(`Home headline: "${model.home.headline}"`);
 
+  if (model.capabilityAudit?.required?.length) {
+    const partial = model.capabilityAudit.required.filter(
+      (id) => model.capabilityAudit?.statusByCapability?.[id] === "partial"
+    );
+    const missing = model.capabilityAudit.required.filter(
+      (id) => model.capabilityAudit?.statusByCapability?.[id] === "missing"
+    );
+    if (model.capabilityAudit.pass) {
+      lines.push("Capability review: preview-complete for required features");
+    } else if (partial.length || missing.length) {
+      lines.push(
+        `Capability review: ${partial.length} partial · ${missing.length} missing in preview`
+      );
+    }
+    if (model.capabilityAudit.autoFixed?.length) {
+      lines.push(`Auto-fixed: ${model.capabilityAudit.autoFixed.join(", ")}`);
+    }
+  }
+
   return lines.join("\n");
 }
 

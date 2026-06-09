@@ -23,6 +23,7 @@ export async function GET(
   const { supabaseConnectorForBuilder } = await import(
     "@/lib/connectors/supabaseConnector"
   );
+  const { sdkConnectorsForBuilder } = await import("@/lib/connectors/sdkConnector");
 
   return NextResponse.json({
     projectId: project.id,
@@ -31,6 +32,8 @@ export async function GET(
     masterPrompt: project.masterPrompt,
     connectors: {
       supabase: supabaseConnectorForBuilder(project.supabaseConnector),
+      sdk: sdkConnectorsForBuilder(project.sdkConnectors),
+      marketplaceSelections: project.marketplaceSelections ?? [],
     },
   });
 }

@@ -49,6 +49,7 @@ import {
   defaultBrainstormState,
   formatBrainstormContextForBuild,
   summarizeReadinessForBuild,
+  truncateBrainstormHistory,
 } from "@/lib/expoApp/brainstormContext";
 import { runBrainstormChat } from "@/lib/expoApp/brainstormChat";
 import {
@@ -440,12 +441,122 @@ export async function runExpoWebBuild(
 export async function expoBrainstormChat(
   projectId: string,
   message: string,
-  pinnedItemId?: string | null
+  pinnedItemId?: string | null,
+  editFromTurnIndex?: number | null
 ): Promise<
   | {
       ok: true;
       reply: string;
       buildSuggestion: import("@/lib/types").BrainstormBuildSuggestion | null;
+      brainstormState: import("@/lib/types").ProjectBrainstormState;
+    }
+  | { ok: false; message: string }
+> {
+  const user = await requireUser();
+  const project = await db.getProject(projectId);
+  if (!project || project.userId !== user.id) throw new Error("NOT_FOUND");
+  if (!project.masterPrompt) throw new Error("NO_PROMPT");
+
+  try {
+    const previewModel = project.expoAppModel ?? null;
+    const interview = project.interview ?? [];
+    const priorBase = project.brainstormState ?? defaultBrainstormState();
+    const prior =
+      typeof editFromTurnIndex === "number" && editFromTurnIndex >= 0
+        ? truncateBrainstormHistory(priorBase, editFromTurnIndex)
+        : priorBase;
+    const { auditAppReadiness, enrichAuditWithState } = await import(
+      "@/lib/expoApp/readinessAudit"
+    );
+    const { applyConnectorsToAudit } = await import("@/lib/connectors/readinessConnector");
+    const { enrichOAuthSetupStatus } = await import("@/lib/expoApp/oauthReadiness");
+    const audit =
+      previewModel != null
+        ? enrichOAuthSetupStatus(
+            applyConnectorsToAudit(
+              enrichAuditWithState(
+                auditAppReadiness(previewModel, project.masterPrompt, interview),
+                project.readinessState,
+                pinnedItemId
+              ),
+              project.supabaseConnector?.public,
+              project.revenueCatConnector?.public,
+              project.railwayConnector?.public
+            ),
+            Boolean(previewModel.flow?.auth?.enabled),
+            project.readinessState
+          )
+        : null;
+    const pinnedItem =
+      pinnedItemId && audit
+        ? audit.items.find((i) => i.id === pinnedItemId) ?? null
+        : null;
+
+    const {
+      formatConnectorContextForCoach,
+      mergeConnectorNeeds,
+      projectConnectorState,
+      suggestConnectors,
+    } = await import("@/lib/connectors/registry");
+    const connectorState = projectConnectorState(project);
+    const connectorSuggestions = mergeConnectorNeeds(
+      suggestConnectors({
+        mp: project.masterPrompt,
+        interview,
+        audit,
+      }),
+      message
+    );
+    const connectorNote = formatConnectorContextForCoach(
+      connectorState,
+      connectorSuggestions,
+      audit,
+      project.marketplaceSelections ?? [],
+      project.masterPrompt.appName
+    );
+
+    const result = await runBrainstormChat(
+      project.masterPrompt,
+      prior.history,
+      message,
+      {
+        model: previewModel,
+        interview,
+        audit,
+        pinnedItem,
+        existingSummary: prior.summary,
+        connectorNote,
+      }
+    );
+
+    const brainstormState = {
+      ...appendBrainstormTurn(prior, message, result.reply),
+      summary: result.summary,
+      pendingBuild: result.buildSuggestion ?? prior.pendingBuild ?? null,
+    };
+
+    await db.updateProject(projectId, { brainstormState });
+
+    return {
+      ok: true,
+      reply: result.reply,
+      buildSuggestion: brainstormState.pendingBuild ?? null,
+      brainstormState,
+    };
+  } catch {
+    return { ok: false, message: "Brainstorm hit a snag — try again." };
+  }
+}
+
+/** Deep research brief when founder discusses an integration in brainstorm. */
+export async function expoIntegrationDeepDive(
+  projectId: string,
+  integrationId: import("@/lib/connectors/catalog").ConnectorId,
+  pinnedItemId?: string | null
+): Promise<
+  | {
+      ok: true;
+      reply: string;
       brainstormState: import("@/lib/types").ProjectBrainstormState;
     }
   | { ok: false; message: string }
@@ -488,29 +599,51 @@ export async function expoBrainstormChat(
 
     const {
       formatConnectorContextForCoach,
-      inferConnectorNeeds,
       mergeConnectorNeeds,
       projectConnectorState,
+      suggestConnectors,
     } = await import("@/lib/connectors/registry");
+    const { resolveIntegrationBrief } = await import("@/lib/connectors/integrationBrief");
+    const { runIntegrationDeepDive } = await import(
+      "@/lib/connectors/integrationBriefServer"
+    );
+    const { getConnectorDefinition } = await import("@/lib/connectors/registry");
+    const { founderIntegrationBriefHint } = await import("@/lib/expoApp/founderVoice");
+
+    const brief =
+      resolveIntegrationBrief({
+        history: prior.history,
+        pinnedIntegrationId: integrationId,
+        appName: project.masterPrompt.appName,
+      }) ?? {
+        integrationId,
+        label: `Full ${getConnectorDefinition(integrationId).displayName} brief`,
+        hint: founderIntegrationBriefHint(project.masterPrompt.appName),
+        userMessage: `[Full integration brief · ${getConnectorDefinition(integrationId).displayName}] Research this deeply for ${project.masterPrompt.appName}.`,
+      };
+
     const connectorState = projectConnectorState(project);
-    const connectorNeeds = mergeConnectorNeeds(
-      inferConnectorNeeds({
+    const connectorSuggestions = mergeConnectorNeeds(
+      suggestConnectors({
         mp: project.masterPrompt,
         interview,
         audit,
       }),
-      message
+      brief.userMessage
     );
     const connectorNote = formatConnectorContextForCoach(
       connectorState,
-      connectorNeeds,
-      audit
+      connectorSuggestions,
+      audit,
+      project.marketplaceSelections ?? [],
+      project.masterPrompt.appName
     );
 
-    const result = await runBrainstormChat(
+    const result = await runIntegrationDeepDive(
       project.masterPrompt,
       prior.history,
-      message,
+      integrationId,
+      brief.userMessage,
       {
         model: previewModel,
         interview,
@@ -522,21 +655,15 @@ export async function expoBrainstormChat(
     );
 
     const brainstormState = {
-      ...appendBrainstormTurn(prior, message, result.reply),
+      ...appendBrainstormTurn(prior, brief.userMessage, result.reply),
       summary: result.summary,
-      pendingBuild: result.buildSuggestion ?? prior.pendingBuild ?? null,
     };
 
     await db.updateProject(projectId, { brainstormState });
 
-    return {
-      ok: true,
-      reply: result.reply,
-      buildSuggestion: brainstormState.pendingBuild ?? null,
-      brainstormState,
-    };
+    return { ok: true, reply: result.reply, brainstormState };
   } catch {
-    return { ok: false, message: "Brainstorm hit a snag — try again." };
+    return { ok: false, message: "Research brief hit a snag — try again." };
   }
 }
 
@@ -626,13 +753,13 @@ export async function expoTweakChat(
   );
   const {
     formatConnectorContextForCoach,
-    inferConnectorNeeds,
     mergeConnectorNeeds,
     projectConnectorState,
+    suggestConnectors,
   } = await import("@/lib/connectors/registry");
   const connectorState = projectConnectorState(project);
-  const connectorNeeds = mergeConnectorNeeds(
-    inferConnectorNeeds({
+  const connectorSuggestions = mergeConnectorNeeds(
+    suggestConnectors({
       mp,
       interview: project.interview ?? [],
       audit,
@@ -642,7 +769,13 @@ export async function expoTweakChat(
   const brainstormContext = formatBrainstormContextForBuild(
     project.brainstormState,
     readinessNote,
-    formatConnectorContextForCoach(connectorState, connectorNeeds, audit),
+    formatConnectorContextForCoach(
+      connectorState,
+      connectorSuggestions,
+      audit,
+      project.marketplaceSelections ?? [],
+      mp.appName
+    ),
     project.expoAppModel
   );
 
@@ -653,8 +786,10 @@ export async function expoTweakChat(
         projectId,
         brainstormContext,
         brainstormHistory: project.brainstormState?.history ?? [],
+        interview: project.interview ?? [],
         connectorState,
-        connectorNeeds,
+        connectorNeeds: connectorSuggestions,
+        marketplaceSelections: project.marketplaceSelections ?? [],
         applyMessagingSchema: async (id) => {
           const { applyMessagingSchemaToProject } = await import("@/server/connectors");
           return applyMessagingSchemaToProject(id);
@@ -706,7 +841,14 @@ export async function expoSelectionTweak(
   const mp = project.masterPrompt;
   const { result, charge } = await runWithAiBilling(
     billingScope(project, false),
-    () => applySelectionTweak(project.expoAppModel!, mp, path, action)
+    () =>
+      applySelectionTweak(
+        project.expoAppModel!,
+        mp,
+        path,
+        action,
+        project.interview ?? []
+      )
   );
 
   if (!charge.ok) {

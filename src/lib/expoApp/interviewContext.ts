@@ -181,6 +181,8 @@ function forbiddenFor(category: AppCategory): string[] {
       ...base,
       "Recipes tab, ingredients lists, cooking steps, chef-hat icon, food scan → recipe",
       "Meal planning, grocery lists, spice settings",
+      "Shop tab, product catalog, cart, Add to cart, storefront — unless user asked to sell products",
+      "Social feed / timeline / followers — this is a service marketplace, not a social network",
     ];
   }
   if (category !== "cooking") {

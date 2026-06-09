@@ -1,8 +1,11 @@
+import { connectorsRequestedInMessage } from "@/lib/connectors/registry";
+import { formatIntegrationPlaybooks } from "@/lib/connectors/integrationPrompts";
 import type { BrainstormTurn, InterviewTurn, MasterBuildPrompt } from "@/lib/types";
 import { coachBuiltStateBlock } from "./builtState";
 import { isDeepBrainstormMessage } from "./brainstormContext";
 import type { AppReadinessAudit, ReadinessItem } from "./readinessAudit";
 import type { ExpoAppModel } from "./types";
+import { founderVoiceBlock } from "./founderVoice";
 
 export type BrainstormIntent =
   | "single_item"
@@ -24,6 +27,8 @@ const RELATED_ITEM: Record<string, string> = {
 export interface RetrievedBrainstormContext {
   intent: BrainstormIntent;
   focusItems: ReadinessItem[];
+  integrationIds: import("@/lib/connectors/catalog").ConnectorId[];
+  appName: string;
   spine: string;
   builtState: string;
   previewSnippets: string;
@@ -192,6 +197,7 @@ function answerInstructions(
     case "single_item":
       return (
         `Answer ONLY about "${focus}" for ${appName}. ` +
+        `They are the founder building the app — not an end-user inside it. ` +
         `Sound like a senior engineer brainstorming over coffee — specific, opinionated, no filler openers. ` +
         `Structure: (1) what the app design already includes for this — skip if listed under Already built (2) demo UI vs production-ready (3) what they'd still need to ship (4) one next step. ` +
         `Never say you see their screen or preview. Do NOT list other checklist items. ~120–180 words.`
@@ -268,6 +274,8 @@ export function retrieveBrainstormContext(
   return {
     intent,
     focusItems,
+    integrationIds: connectorsRequestedInMessage(message),
+    appName: mp.appName,
     spine: buildSpine(mp, model),
     builtState: coachBuiltStateBlock(model),
     previewSnippets: model ? previewSnippetsForItems(model, focusItems) : "",
@@ -289,6 +297,10 @@ export function formatRetrievedContextForPrompt(
 
   if (connectorNote?.trim()) {
     parts.push("--- Connections (platform) ---", connectorNote.trim());
+  }
+
+  if (retrieved.integrationIds.length > 0) {
+    parts.push(formatIntegrationPlaybooks(retrieved.integrationIds, retrieved.appName));
   }
 
   if (retrieved.builtState) {
@@ -322,6 +334,7 @@ export function formatRetrievedContextForPrompt(
   }
 
   parts.push("--- How to answer ---", retrieved.answerInstructions);
+  parts.push("--- Founder lens ---", founderVoiceBlock(retrieved.appName));
 
   return parts.join("\n\n");
 }

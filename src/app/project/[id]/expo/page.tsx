@@ -60,6 +60,14 @@ export default async function ExpoBuildPage({
         initialSupabaseConnector={project.supabaseConnector?.public ?? null}
         initialRevenueCatConnector={project.revenueCatConnector?.public ?? null}
         initialRailwayConnector={project.railwayConnector?.public ?? null}
+        initialMarketplaceSelections={project.marketplaceSelections ?? []}
+        initialSdkConnectors={Object.fromEntries(
+          Object.entries(project.sdkConnectors ?? {}).map(([id, c]) => [
+            id,
+            c?.public ?? null,
+          ])
+        )}
+        initialInsightsState={project.insightsState}
         showWatermark={shouldShowAppableWatermark(user)}
         previewToken={project.expoPreviewToken ?? null}
         className="min-h-0 flex-1"

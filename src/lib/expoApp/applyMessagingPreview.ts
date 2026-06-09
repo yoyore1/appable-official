@@ -1,5 +1,7 @@
 import type { MasterBuildPrompt } from "@/lib/types";
 import { resolveMessagesTab } from "./builtState";
+import { assignPreviewPatterns } from "./preview/assignPatterns";
+import { listItemsToThreads } from "./preview/patterns/messagingData";
 import type { ExpoAppModel, ExpoListItem, PreviewActionPlan } from "./types";
 
 export function wantsMessagingBackendWork(message: string): boolean {
@@ -104,16 +106,25 @@ export function wireMessagingInPreview(
     },
   ];
 
-  const next: ExpoAppModel = {
-    ...model,
-    tabs,
-    tabScreens,
-    previewActions: {
-      ...model.previewActions,
-      messagingTabId: messagesTabId,
-      rules,
+  const threadData = listItemsToThreads(threads);
+  const next: ExpoAppModel = assignPreviewPatterns(
+    {
+      ...model,
+      tabs,
+      tabScreens,
+      previewActions: {
+        ...model.previewActions,
+        messagingTabId: messagesTabId,
+        rules,
+      },
+      previewState: {
+        ...model.previewState,
+        threads: threadData,
+      },
     },
-  };
+    mp,
+    []
+  );
 
   const tabNote = addedTab
     ? " Added a Messages tab without removing your other tabs."

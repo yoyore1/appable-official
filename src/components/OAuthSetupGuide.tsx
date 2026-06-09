@@ -76,11 +76,11 @@ function ProviderSection({
   const [open, setOpen] = useState(defaultOpen ?? false);
 
   return (
-    <div className="rounded-xl border border-line/35 bg-white/80">
+    <div className="rounded-xl border border-line/25 bg-white/90 shadow-sm">
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
-        className="flex w-full items-center gap-2 px-2.5 py-2 text-left"
+        className="flex w-full items-center gap-2.5 px-3 py-2.5 text-left transition hover:bg-sand/30"
         aria-expanded={open}
       >
         <span
@@ -96,15 +96,15 @@ function ProviderSection({
           )}
         </span>
         <span className="min-w-0 flex-1">
-          <span className="block text-[11px] font-bold text-charcoal">{title}</span>
-          <span className="block text-[9px] text-warmgrey">{subtitle}</span>
+          <span className="block text-[11px] font-semibold text-charcoal">{title}</span>
+          <span className="block text-[10px] text-warmgrey">{subtitle}</span>
         </span>
         <ChevronDown
           className={cn("h-4 w-4 shrink-0 text-warmgrey transition", open && "rotate-180")}
         />
       </button>
       {open && (
-        <div className="border-t border-line/25 px-2.5 pb-2.5 pt-1">
+        <div className="border-t border-line/15 px-3 pb-3 pt-2">
           <StepList steps={steps} />
         </div>
       )}
@@ -120,10 +120,10 @@ export function OAuthSetupGuide({
   compact?: boolean;
 }) {
   return (
-    <div className={cn("space-y-2", compact ? "" : "mt-2")}>
-      <div className="rounded-lg border border-coral/20 bg-coral/[0.06] px-2.5 py-2">
-        <p className="text-[9px] font-semibold text-charcoal">Before you start</p>
-        <p className="mt-0.5 text-[9px] leading-snug text-warmgrey">{OAUTH_EXPECTATIONS}</p>
+    <div className={cn("space-y-2.5", compact ? "" : "mt-2")}>
+      <div className="rounded-xl border border-sky-200/50 bg-sky-50/60 px-3 py-2.5">
+        <p className="text-[10px] font-semibold text-charcoal">Before you start</p>
+        <p className="mt-0.5 text-[10px] leading-relaxed text-warmgrey">{OAUTH_EXPECTATIONS}</p>
       </div>
       <ProviderSection
         provider="google"

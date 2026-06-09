@@ -138,6 +138,10 @@ export const db = {
       .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
   },
 
+  async listAllProjects(): Promise<Project[]> {
+    return [...store().projects.values()];
+  },
+
   async updateProject(id: string, patch: Partial<Project>): Promise<Project> {
     const s = store();
     const p = s.projects.get(id);

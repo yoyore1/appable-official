@@ -4,6 +4,8 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { AnimatePresence, motion } from "framer-motion";
 import { ArrowRight, ChevronDown, Loader2, RefreshCw, Sparkles } from "lucide-react";
+import { VoiceMicButton } from "@/components/VoiceMicButton";
+import { useVoiceDictation } from "@/hooks/useVoiceDictation";
 import { FIRST_INTERVIEW_QUESTION } from "@/lib/interviewFlow";
 import {
   COLD_START_KEY,
@@ -114,6 +116,14 @@ export function LandingHero() {
   const [deepLoading, setDeepLoading] = useState<number | null>(null);
   const [deepMsgIdx, setDeepMsgIdx] = useState(0);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+  const voice = useVoiceDictation({
+    onTranscript: (text) => {
+      setValue((prev) => (prev.trim() ? `${prev.trim()} ${text}` : text));
+      setSuggestError(null);
+      requestAnimationFrame(() => textareaRef.current?.focus());
+    },
+  });
 
   const composing = focused || value.length > 0;
   const hasText = value.trim().length > 0;
@@ -353,10 +363,27 @@ export function LandingHero() {
             />
           </div>
 
+          {(voice.statusLabel || voice.error) && (
+            <p
+              className={`mt-2 text-[11px] ${voice.error ? "text-coral-deep" : "text-warmgrey"}`}
+              role="status"
+            >
+              {voice.error ?? voice.statusLabel}
+            </p>
+          )}
+
           <div className="mt-4 flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center">
             <button type="submit" className="btn-primary btn-pill w-full sm:w-auto">
               Start building <ArrowRight className="h-5 w-5" />
             </button>
+            {voice.supported && (
+              <VoiceMicButton
+                listening={voice.listening}
+                transcribing={voice.transcribing}
+                disabled={suggesting}
+                onClick={voice.toggle}
+              />
+            )}
             <div className="flex w-full items-center gap-2 sm:w-auto">
               <button
                 type="button"

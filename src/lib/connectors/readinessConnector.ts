@@ -20,6 +20,7 @@ export function applyConnectorsToAudit(
     supabase: supabase ?? null,
     revenueCat: revenueCat ?? null,
     railway: railway ?? null,
+    sdk: {},
   };
   return applyConnectorRegistryToAudit(audit, state);
 }

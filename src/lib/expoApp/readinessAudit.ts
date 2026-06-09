@@ -113,6 +113,14 @@ function modelHasMessagingTab(model: ExpoAppModel): boolean {
   return model.tabs.some((t) => /message|chat|inbox/i.test(`${t.id} ${t.label}`));
 }
 
+function capabilityStatusFromAudit(
+  model: ExpoAppModel,
+  capability: import("./capabilities").CapabilityId
+): ReadinessStatus | null {
+  const snap = model.capabilityAudit?.statusByCapability?.[capability];
+  return snap ?? null;
+}
+
 function modelHasPaymentsUi(model: ExpoAppModel): boolean {
   const scan = JSON.stringify({
     home: model.home,
@@ -333,15 +341,22 @@ export function auditAppReadiness(
     dualSided;
 
   if (needsMessaging) {
+    const audited = capabilityStatusFromAudit(model, "messaging");
+    const status: ReadinessStatus =
+      audited ??
+      (modelHasMessagingTab(model) ? "partial" : "missing");
     push(items, {
       id: "messaging",
       category: "messaging",
       title: "In-app messaging",
-      status: modelHasMessagingTab(model) ? "partial" : "missing",
-      plainWhy: modelHasMessagingTab(model)
-        ? "A Messages tab is in the preview — real-time chat still needs a backend."
-        : "Users often need to coordinate (bookings, questions, updates) without leaving the app.",
-      inPreview: modelHasMessagingTab(model),
+      status,
+      plainWhy:
+        status === "have"
+          ? "Messages tab, sample threads, and reply actions are wired in the preview — connect Supabase for live chat."
+          : status === "partial"
+            ? "Messaging started in the preview — threads or reply wiring may still need backend (Supabase)."
+            : "Users often need to coordinate (bookings, questions, updates) without leaving the app.",
+      inPreview: status !== "missing",
       priority: dualSided ? "launch_blocker" : "soon",
     });
   }

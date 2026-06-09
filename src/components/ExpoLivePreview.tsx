@@ -41,10 +41,22 @@ import type {
   ExpoAppCapabilities,
   ExpoAppFlow,
   ExpoAppModel,
+  ExpoCartLine,
   ExpoIconName,
   ExpoListItem,
+  ExpoMessageThread,
   ExpoUserRole,
 } from "@/lib/expoApp/types";
+import {
+  appendThreadMessage,
+  createThreadFromCompose,
+} from "@/lib/expoApp/preview/patterns/messagingData";
+import { previewTokens } from "@/lib/expoApp/preview/tokens";
+import { ContentDetailPattern } from "@/components/preview/patterns/ContentDetail";
+import { HomeDashboardPattern } from "@/components/preview/patterns/HomeDashboard";
+import { ConversationView } from "@/components/preview/patterns/ConversationView";
+import { PreviewComposeSheet } from "@/components/preview/primitives";
+import { TabPatternView } from "@/components/preview/TabPatternView";
 import { completeAuthFlow } from "@/lib/expoApp/authFlowDefaults";
 import { imageForCategory } from "@/lib/expoApp/images";
 import {
@@ -75,6 +87,7 @@ import { withLegalSettings } from "@/lib/expoApp/smartInteractions";
 import { recipeListenText } from "@/lib/expoApp/recipeDetails";
 import type { TweakTarget } from "@/lib/expoApp/tweakPaths";
 import { DeviceMockup } from "@/components/DeviceMockup";
+import type { EditPick } from "@/components/PreviewEditChrome";
 import { cn } from "@/lib/utils";
 import {
   previewDeviceKind,
@@ -135,6 +148,17 @@ const fadeUp = {
   }),
 };
 
+function RoleIcon({ value, className }: { value: string; className?: string }) {
+  const v = value.trim();
+  if (v.startsWith("data:image/") || /^https?:\/\//i.test(v)) {
+    return (
+      // eslint-disable-next-line @next/next/no-img-element
+      <img src={v} alt="" className={cn("h-full w-full object-cover", className)} />
+    );
+  }
+  return <span className={className}>{v || "✦"}</span>;
+}
+
 /** Never show a broken/grey box — fade in only after pixels load, swap to fallback on error. */
 function CoverImage({
   src,
@@ -194,6 +218,117 @@ function defaultCapabilities(model: ExpoAppModel): ExpoAppCapabilities {
   };
 }
 
+type FixEditProps = {
+  editMode?: boolean;
+  editPick?: EditPick;
+  selectedTarget?: TweakTarget | null;
+  onSelectTarget?: (target: TweakTarget) => void;
+};
+
+type PickSurface = { path: string; label: string; field: string };
+
+const SURFACE = {
+  accent: (label: string): PickSurface => ({ path: "theme.accent", label, field: "brand color" }),
+  card: (label: string): PickSurface => ({ path: "theme.card", label, field: "card background" }),
+  cream: (label: string): PickSurface => ({ path: "theme.cream", label, field: "background" }),
+  charcoal: (label: string): PickSurface => ({ path: "theme.charcoal", label, field: "text color" }),
+  muted: (label: string): PickSurface => ({ path: "theme.muted", label, field: "muted text" }),
+} as const;
+
+function isTargetSelected(
+  selected: TweakTarget | null | undefined,
+  target: TweakTarget
+): boolean {
+  return selected?.path === target.path && selected?.label === target.label;
+}
+
+function SurfaceSelectable({
+  editMode,
+  editPick,
+  path,
+  label,
+  field,
+  selectedTarget,
+  onSelectTarget,
+  children,
+  className,
+  style,
+  block,
+  overlay,
+}: FixEditProps & {
+  path: string;
+  label: string;
+  field: string;
+  children?: ReactNode;
+  className?: string;
+  style?: CSSProperties;
+  block?: boolean;
+  overlay?: boolean;
+}) {
+  if (!editMode || !onSelectTarget || editPick !== "surface") {
+    return overlay ? null : <>{children}</>;
+  }
+  const target = { path, label, field };
+  const selected = isTargetSelected(selectedTarget, target);
+  const pick = (e: { stopPropagation: () => void; preventDefault: () => void }) => {
+    e.stopPropagation();
+    e.preventDefault();
+    onSelectTarget(target);
+  };
+  if (overlay) {
+    return (
+      <div
+        role="button"
+        tabIndex={0}
+        onClick={pick}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" || e.key === " ") pick(e);
+        }}
+        className={cn(
+          "pointer-events-auto absolute inset-0 z-[1] touch-manipulation rounded-[inherit] transition",
+          selected
+            ? "ring-2 ring-inset ring-coral/70"
+            : "hover:ring-2 hover:ring-inset hover:ring-coral/35"
+        )}
+        aria-label={label}
+      />
+    );
+  }
+  return (
+    <div
+      role="button"
+      tabIndex={0}
+      onClick={pick}
+      onKeyDown={(e) => {
+        if (e.key === "Enter" || e.key === " ") pick(e);
+      }}
+      style={style}
+      className={cn(
+        className,
+        block && "block w-full cursor-pointer",
+        "pointer-events-auto relative z-[2] touch-manipulation rounded-xl transition",
+        selected
+          ? "border-2 border-coral shadow-[0_0_0_2px_rgba(255,122,99,0.15)]"
+          : "border-2 border-transparent hover:border-coral/35 active:border-coral/50"
+      )}
+    >
+      {selected && <SelectionMarker />}
+      {children}
+    </div>
+  );
+}
+
+function SelectionMarker() {
+  return (
+    <span
+      className="pointer-events-none absolute -right-0.5 -top-2.5 z-[8] rounded-full border border-white/90 bg-coral px-1.5 py-0.5 text-[8px] font-bold leading-none tracking-wide text-white shadow-[0_2px_10px_rgba(255,122,99,0.5)]"
+      aria-hidden
+    >
+      ✓
+    </span>
+  );
+}
+
 export function ExpoLivePreview({
   projectId,
   model,
@@ -203,7 +338,10 @@ export function ExpoLivePreview({
   alive,
   className,
   editMode,
-  selectedPath,
+  editPick = "content",
+  editModeHint = "Tap anything to fix it",
+  hideEditBanner = false,
+  selectedTarget,
   onSelectTarget,
   showWatermark,
 }: {
@@ -218,7 +356,11 @@ export function ExpoLivePreview({
   className?: string;
   /** Replit-style tap-to-fix — select elements instead of navigating. */
   editMode?: boolean;
-  selectedPath?: string | null;
+  editPick?: EditPick;
+  editModeHint?: string;
+  /** Parent chrome shows the edit bar — hide the in-phone banner. */
+  hideEditBanner?: boolean;
+  selectedTarget?: TweakTarget | null;
   onSelectTarget?: (target: TweakTarget) => void;
   /** Free-tier "Made with Appable" badge on the preview. */
   showWatermark?: boolean;
@@ -255,7 +397,11 @@ export function ExpoLivePreview({
     title: string;
     placeholder: string;
     sourceItemId: string;
+    threadId?: string;
   } | null>(null);
+  const [threads, setThreads] = useState<ExpoMessageThread[]>([]);
+  const [cartLines, setCartLines] = useState<ExpoCartLine[]>([]);
+  const [activeThreadId, setActiveThreadId] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
   const [settingsRow, setSettingsRow] = useState<string | null>(null);
   const [settingsToggles, setSettingsToggles] = useState<Record<string, boolean>>({});
@@ -265,11 +411,11 @@ export function ExpoLivePreview({
   const recorderRef = useRef<MediaRecorder | null>(null);
   const recordStreamRef = useRef<MediaStream | null>(null);
   const recordChunksRef = useRef<Blob[]>([]);
+  const modelStructureSigRef = useRef<string | null>(null);
+  const imageUrlMapRef = useRef<Record<string, string>>({});
 
   useEffect(() => {
     if (!editMode) return;
-    setLaunchPhase("main");
-    setOnboarded(true);
     setDetail(null);
     setScanOpen(false);
     setVoiceOpen(false);
@@ -284,6 +430,22 @@ export function ExpoLivePreview({
     return applyItemPatches(roleApplied, itemPatches, injectedByTab);
   }, [previewModel, roleId, itemPatches, injectedByTab]);
   const theme = previewModel?.theme;
+  const tokens = useMemo(() => (theme ? previewTokens(theme) : null), [theme]);
+  const activeThread = useMemo(
+    () => threads.find((t) => t.id === activeThreadId) ?? null,
+    [threads, activeThreadId]
+  );
+
+  useEffect(() => {
+    const incoming = previewModel?.previewState?.threads;
+    if (incoming?.length) setThreads(incoming);
+  }, [previewModel?.previewState?.threads]);
+
+  useEffect(() => {
+    const incoming = previewModel?.previewState?.cart;
+    if (incoming?.length) setCartLines(incoming);
+  }, [previewModel?.previewState?.cart]);
+
   const showLive =
     previewModel && (!building || (buildPercent ?? 0) >= 55) && imagesReady;
   const caps = previewModel ? defaultCapabilities(previewModel) : null;
@@ -311,8 +473,16 @@ export function ExpoLivePreview({
 
   useEffect(() => {
     if (!model) return;
+    const sig = modelStructureSignature(model);
+    if (modelStructureSigRef.current === sig) return;
+    modelStructureSigRef.current = sig;
+
     setSelectedRole(null);
     setOnboardIdx(0);
+    setItemPatches({});
+    setInjectedByTab({});
+    setCompose(null);
+    setDetail(null);
 
     if (model.flow?.auth?.enabled) {
       setLaunchPhase("auth");
@@ -389,27 +559,29 @@ export function ExpoLivePreview({
   }
 
   useEffect(() => {
-    setItemPatches({});
-    setInjectedByTab({});
-    setCompose(null);
-    setDetail(null);
-  }, [model]);
-
-  useEffect(() => {
     if (!model) {
       setImagesReady(false);
       setDisplayModel(null);
+      imageUrlMapRef.current = {};
       return;
     }
     let cancelled = false;
-    setImagesReady(false);
     const urls = collectModelImageUrls(model);
     const category = model.category ?? "general";
+    const urlKey = [...urls].sort().join("\0");
+    const prevKey = Object.keys(imageUrlMapRef.current).sort().join("\0");
+
+    if (urlKey === prevKey && Object.keys(imageUrlMapRef.current).length > 0) {
+      setDisplayModel(withLegalSettings(applyImageFallbacks(model, imageUrlMapRef.current)));
+      setImagesReady(true);
+      return;
+    }
+
+    setImagesReady(false);
     void preloadImages(urls, category).then((urlMap) => {
       if (cancelled) return;
-      setDisplayModel(
-        withLegalSettings(applyImageFallbacks(model, urlMap))
-      );
+      imageUrlMapRef.current = urlMap;
+      setDisplayModel(withLegalSettings(applyImageFallbacks(model, urlMap)));
       setImagesReady(true);
     });
     return () => {
@@ -440,8 +612,35 @@ export function ExpoLivePreview({
     });
   }
 
+  function addToCart(item: ExpoListItem) {
+    setCartLines((prev) => {
+      const hit = prev.find((l) => l.id === item.id);
+      if (hit) {
+        return prev.map((l) => (l.id === item.id ? { ...l, qty: l.qty + 1 } : l));
+      }
+      return [
+        ...prev,
+        {
+          id: item.id,
+          title: item.title,
+          price: item.meta ?? "$0",
+          imageUrl: item.imageUrl,
+          qty: 1,
+        },
+      ];
+    });
+  }
+
   function handlePrimaryAction(item: ExpoListItem) {
     if (!previewModel || !ix || editMode) return;
+    const actionLabel = (item.primaryAction ?? "").toLowerCase();
+    if (/add to cart|buy now/.test(actionLabel)) {
+      addToCart(item);
+      const cartTab = findTabId(previewModel, /cart|bag/i);
+      if (cartTab) setTab(cartTab);
+      setToast(`Added ${item.title} to cart`);
+      return;
+    }
     const outcome = resolveActionOutcome(item, previewModel, ix);
     if (outcome.triggerSave) {
       toggleSave(item);
@@ -461,6 +660,7 @@ export function ExpoLivePreview({
       setCompose({
         ...outcome.openCompose,
         sourceItemId: item.id,
+        threadId: item.id,
       });
     } else if (outcome.openDetail) {
       setDetail({ ...item, ...mergedPatch });
@@ -476,7 +676,24 @@ export function ExpoLivePreview({
       previewModel.previewActions?.messagingTabId ??
       findTabId(previewModel, /message|chat|inbox/i) ??
       findTabId(previewModel, /bell/i);
-    if (messagesTab) {
+    const patternId =
+      messagesTab && previewModel.tabScreens[messagesTab]?.patternId
+        ? previewModel.tabScreens[messagesTab].patternId
+        : previewModel.previewPatterns?.tabs[messagesTab ?? ""];
+
+    if (messagesTab && patternId === "inbox-threads") {
+      if (compose.threadId) {
+        setThreads((prev) => appendThreadMessage(prev, compose.threadId!, trimmed));
+        setActiveThreadId(compose.threadId);
+      } else {
+        setThreads((prev) => {
+          const next = createThreadFromCompose(prev, trimmed);
+          if (next[0]) setActiveThreadId(next[0].id);
+          return next;
+        });
+      }
+      setTab(messagesTab);
+    } else if (messagesTab) {
       setInjectedByTab((prev) => ({
         ...prev,
         [messagesTab]: [
@@ -787,7 +1004,23 @@ export function ExpoLivePreview({
         }}
       />
       <PhoneShell alive={alive} className={className}>
-        <div className="flex h-full flex-col" style={{ background: t.cream, ...fontStyle }}>
+        <div className="relative flex h-full flex-col" style={{ background: t.cream, ...fontStyle }}>
+          <SurfaceSelectable
+            overlay
+            editMode={editMode}
+            editPick={editPick}
+            path="theme.cream"
+            label="App background"
+            field="background"
+            selectedTarget={selectedTarget}
+            onSelectTarget={onSelectTarget}
+          />
+          <div
+            className={cn(
+              "relative z-[1] flex min-h-0 flex-1 flex-col",
+              editMode && editPick === "surface" && onSelectTarget && "pointer-events-none"
+            )}
+          >
           <StatusBar />
 
           <div className="relative min-h-0 flex-1 overflow-hidden px-3 pb-0 pt-1">
@@ -811,7 +1044,12 @@ export function ExpoLivePreview({
                   flow={readyModel.flow}
                   theme={t}
                   appName={readyModel.profile.displayName}
+                  editMode={editMode}
+          editPick={editPick}
+                  selectedTarget={selectedTarget}
+                  onSelectTarget={onSelectTarget}
                   onPick={(role) => {
+                    if (editMode) return;
                     setSelectedRole(role);
                     setTab("home");
                     if (readyModel.flow?.setupFields?.length) setLaunchPhase("setup");
@@ -829,7 +1067,12 @@ export function ExpoLivePreview({
                   flow={readyModel.flow}
                   theme={t}
                   roleLabel={selectedRole?.label}
+                  editMode={editMode}
+          editPick={editPick}
+                  selectedTarget={selectedTarget}
+                  onSelectTarget={onSelectTarget}
                   onDone={() => {
+                    if (editMode) return;
                     if (readyModel.onboarding.length && !startPastOnboarding) {
                       setLaunchPhase("onboarding");
                     } else {
@@ -850,7 +1093,12 @@ export function ExpoLivePreview({
                   key="ob"
                   model={readyModel}
                   idx={onboardIdx}
+                  editMode={editMode}
+          editPick={editPick}
+                  selectedTarget={selectedTarget}
+                  onSelectTarget={onSelectTarget}
                   onNext={() => {
+                    if (editMode) return;
                     if (onboardIdx < readyModel.onboarding.length - 1) {
                       setOnboardIdx((i) => i + 1);
                     } else {
@@ -866,46 +1114,80 @@ export function ExpoLivePreview({
                     }
                   }}
                   onSkip={() => {
+                    if (editMode) return;
                     setOnboarded(true);
                     setLaunchPhase("main");
                     setTab("home");
                   }}
                 />
               ) : tab === "home" ? (
-                <HomeScreen
-                  key="home"
-                  model={readyModel}
-                  editMode={editMode}
-                  selectedPath={selectedPath}
-                  onSelectTarget={onSelectTarget}
-                  onOpen={editMode ? () => {} : setDetail}
-                  onHero={editMode ? () => {} : handleHeroAction}
-                  onPrimaryAction={editMode ? undefined : handlePrimaryAction}
-                  hasScan={canScan && !editMode}
-                  onVoice={canVoice && !editMode ? () => setVoiceOpen(true) : undefined}
-                  scanning={scanBusy}
-                  recording={recording}
-                />
+                viewModel && tokens && !editMode && viewModel.previewPatterns?.home === "home-dashboard" ? (
+                  <HomeDashboardPattern
+                    key="home"
+                    tokens={tokens}
+                    headline={viewModel.home.headline}
+                    subheadline={viewModel.home.subheadline}
+                    heroLabel={viewModel.home.heroLabel}
+                    heroSublabel={viewModel.home.heroSublabel}
+                    sections={viewModel.home.sections}
+                    category={viewModel.category}
+                    onOpen={setDetail}
+                    onHero={handleHeroAction}
+                    onPrimaryAction={handlePrimaryAction}
+                    hasScan={canScan}
+                    onVoice={canVoice ? () => setVoiceOpen(true) : undefined}
+                    scanning={scanBusy}
+                    recording={recording}
+                  />
+                ) : (
+                  <HomeScreen
+                    key="home"
+                    model={readyModel}
+                    editMode={editMode}
+          editPick={editPick}
+                    selectedTarget={selectedTarget}
+                    onSelectTarget={onSelectTarget}
+                    onOpen={editMode ? () => {} : setDetail}
+                    onHero={editMode ? () => {} : handleHeroAction}
+                    onPrimaryAction={editMode ? undefined : handlePrimaryAction}
+                    hasScan={canScan && !editMode}
+                    onVoice={canVoice && !editMode ? () => setVoiceOpen(true) : undefined}
+                    scanning={scanBusy}
+                    recording={recording}
+                  />
+                )
               ) : tab === "profile" ? (
                 <ProfileScreen
                   key="profile"
                   model={readyModel}
                   editMode={editMode}
-                  selectedPath={selectedPath}
+          editPick={editPick}
+                  selectedTarget={selectedTarget}
                   onSelectTarget={onSelectTarget}
                   savedCount={savedIds.size}
                   savedStatPatterns={ix?.savedStatPatterns}
                   onSetting={editMode ? () => {} : (label) => setSettingsRow(label)}
                 />
-              ) : (
-                <TabScreen
+              ) : viewModel && tokens ? (
+                <TabPatternView
                   key={tab}
-                  screen={resolvedTab?.screen}
+                  model={viewModel}
+                  tokens={tokens}
                   tabId={resolvedTab?.resolvedId ?? tab}
-                  theme={t}
-                  editMode={editMode}
-                  selectedPath={selectedPath}
-                  onSelectTarget={onSelectTarget}
+                  threads={threads}
+                  onOpenThread={(id) => {
+                    setActiveThreadId(id);
+                  }}
+                  onNewMessage={() => {
+                    setCompose({
+                      title: "New message",
+                      placeholder: "Type your message…",
+                      sourceItemId: "new",
+                    });
+                  }}
+                  onOpenItem={editMode ? () => {} : setDetail}
+                  onPrimaryAction={editMode ? undefined : handlePrimaryAction}
+                  listsTab={ix ? isListsTab(tab, ix) : false}
                   checked={checked}
                   onToggle={(id) => {
                     setChecked((s) => {
@@ -915,18 +1197,57 @@ export function ExpoLivePreview({
                       return n;
                     });
                   }}
-                  onOpen={editMode ? () => {} : setDetail}
-                  onPrimaryAction={editMode ? undefined : handlePrimaryAction}
-                  extraItems={
-                    tab === collectionTabId ? extraListItems : undefined
-                  }
-                  listsTab={ix ? isListsTab(tab, ix) : false}
-                  onShareList={canShare && !editMode ? handleShareList : undefined}
-                />
-              )}
+                  extraItems={tab === collectionTabId ? extraListItems : undefined}
+                  cartLines={cartLines}
+                  editMode={editMode}
+                >
+                  <TabScreen
+                    screen={resolvedTab?.screen}
+                    tabId={resolvedTab?.resolvedId ?? tab}
+                    theme={t}
+                    editMode={editMode}
+          editPick={editPick}
+                    selectedTarget={selectedTarget}
+                    onSelectTarget={onSelectTarget}
+                    checked={checked}
+                    onToggle={(id) => {
+                      setChecked((s) => {
+                        const n = new Set(s);
+                        if (n.has(id)) n.delete(id);
+                        else n.add(id);
+                        return n;
+                      });
+                    }}
+                    onOpen={editMode ? () => {} : setDetail}
+                    onPrimaryAction={editMode ? undefined : handlePrimaryAction}
+                    extraItems={
+                      tab === collectionTabId ? extraListItems : undefined
+                    }
+                    listsTab={ix ? isListsTab(tab, ix) : false}
+                    onShareList={canShare && !editMode ? handleShareList : undefined}
+                  />
+                </TabPatternView>
+              ) : null}
             </AnimatePresence>
 
-            {detail && (
+            {detail && tokens && !editMode && viewModel?.previewPatterns?.detail === "content-detail" ? (
+              <ContentDetailPattern
+                tokens={tokens}
+                item={detail}
+                category={viewModel.category}
+                onClose={() => setDetail(null)}
+                onListen={canTts ? () => void playTts(recipeListenText(detail)) : undefined}
+                listenBusy={ttsBusy}
+                onSave={canSave ? () => toggleSave(detail) : undefined}
+                isSaved={savedIds.has(detail.id)}
+                onAddToList={canAddToCollection ? () => addToCollection(detail) : undefined}
+                onShare={canShare ? () => void handleShare(detail) : undefined}
+                onPrimaryAction={
+                  detail.primaryAction ? () => handlePrimaryAction(detail) : undefined
+                }
+                collectionLabel={collectionLabel}
+              />
+            ) : detail ? (
               <DetailSheet
                 item={detail}
                 theme={t}
@@ -944,14 +1265,30 @@ export function ExpoLivePreview({
                 }
                 collectionLabel={collectionLabel}
               />
-            )}
-            {compose && (
-              <ComposeSheet
+            ) : null}
+            {compose && tokens && (
+              <PreviewComposeSheet
+                tokens={tokens}
                 title={compose.title}
                 placeholder={compose.placeholder}
-                theme={t}
                 onClose={() => setCompose(null)}
                 onSend={handleComposeSend}
+              />
+            )}
+            {activeThread && tokens && viewModel && (
+              <ConversationView
+                tokens={tokens}
+                thread={activeThread}
+                category={viewModel.category}
+                onBack={() => setActiveThreadId(null)}
+                onReply={() => {
+                  setCompose({
+                    title: `Reply to ${activeThread.participant}`,
+                    placeholder: "Type your message…",
+                    sourceItemId: activeThread.id,
+                    threadId: activeThread.id,
+                  });
+                }}
               />
             )}
             {settingsRow && (
@@ -1040,14 +1377,15 @@ export function ExpoLivePreview({
               active={tab}
               theme={t}
               editMode={editMode}
-              selectedPath={selectedPath}
+          editPick={editPick}
+              selectedTarget={selectedTarget}
               onSelectTarget={onSelectTarget}
               onSelect={editMode ? () => {} : setTab}
             />
           )}
-          {editMode && (
+          {editMode && !hideEditBanner && (
             <div className="pointer-events-none absolute inset-x-2 top-8 z-30 rounded-lg bg-coral/90 px-2 py-1 text-center text-[9px] font-bold text-white">
-              Tap anything to fix it
+              {editModeHint}
             </div>
           )}
 
@@ -1063,10 +1401,11 @@ export function ExpoLivePreview({
           )}
 
           {showWatermark && <AppableWatermark />}
+          </div>
         </div>
       </PhoneShell>
 
-      {!building && showLive && (
+      {!building && showLive && !editMode && (
         <p className="mt-3 text-center text-[11px] leading-snug text-warmgrey">
           Tap any card → <strong className="text-charcoal">Save</strong>
           {canAddToCollection ? (
@@ -1447,54 +1786,164 @@ function HomeIndicator() {
   );
 }
 
+/** Tabs/roles/onboarding shape — tap-to-fix text edits must not reset preview navigation. */
+function modelStructureSignature(model: ExpoAppModel): string {
+  return JSON.stringify({
+    auth: Boolean(model.flow?.auth?.enabled),
+    roles: model.flow?.roles?.map((r) => r.id) ?? [],
+    setupLen: model.flow?.setupFields?.length ?? 0,
+    onboardingLen: model.onboarding?.length ?? 0,
+    tabIds: model.tabs.map((tab) => tab.id),
+  });
+}
+
 function RoleSelectScreen({
   flow,
   theme,
   appName,
+  editMode,
+  editPick,
+  selectedTarget,
+  onSelectTarget,
   onPick,
-}: {
+}: FixEditProps & {
   flow: ExpoAppFlow;
   theme: ExpoAppModel["theme"];
   appName: string;
   onPick: (role: ExpoUserRole) => void;
 }) {
   const t = theme;
+  const roles = flow.roles ?? [];
   return (
     <motion.div
       initial={{ opacity: 0, y: 12 }}
       animate={{ opacity: 1, y: 0 }}
       className="flex h-full flex-col justify-center py-2"
     >
-      <p className="text-center text-[13px] font-extrabold" style={{ color: t.charcoal }}>
-        {flow.welcomeTitle ?? `Welcome to ${appName}`}
-      </p>
-      <p className="mt-1 text-center text-[10px] leading-snug" style={{ color: t.muted }}>
-        {flow.welcomeSubtitle ?? "How will you use the app?"}
-      </p>
+      <Selectable
+        editMode={editMode}
+          editPick={editPick}
+        selectedTarget={selectedTarget}
+        onSelectTarget={onSelectTarget}
+        path="flow.welcomeTitle"
+        label="Welcome title"
+        field="title"
+        surface={SURFACE.charcoal("Welcome title")}
+        className="text-center"
+      >
+        <p className="text-[13px] font-extrabold" style={{ color: t.charcoal }}>
+          {flow.welcomeTitle ?? `Welcome to ${appName}`}
+        </p>
+      </Selectable>
+      <Selectable
+        editMode={editMode}
+          editPick={editPick}
+        selectedTarget={selectedTarget}
+        onSelectTarget={onSelectTarget}
+        path="flow.welcomeSubtitle"
+        label="Welcome subtitle"
+        field="subtitle"
+        surface={SURFACE.muted("Welcome subtitle")}
+        className="mt-1 text-center"
+      >
+        <p className="text-[10px] leading-snug" style={{ color: t.muted }}>
+          {flow.welcomeSubtitle ?? "How will you use the app?"}
+        </p>
+      </Selectable>
       <div className="mt-4 space-y-2">
-        {(flow.roles ?? []).map((role) => (
-          <motion.button
-            key={role.id}
-            type="button"
-            whileTap={{ scale: 0.98 }}
-            onClick={() => onPick(role)}
-            className="flex w-full items-center gap-3 rounded-2xl border p-3 text-left shadow-sm"
-            style={{ borderColor: t.line, background: "#fff" }}
-          >
-            <span className="grid h-10 w-10 place-items-center rounded-xl text-lg" style={{ background: `${t.accent}14` }}>
-              {role.emoji ?? "✦"}
-            </span>
-            <span className="min-w-0 flex-1">
-              <span className="block text-[11px] font-bold" style={{ color: t.charcoal }}>
-                {role.label}
+        {roles.map((role, index) => {
+          const cardInner = (
+            <>
+              <Selectable
+                editMode={editMode}
+                editPick={editPick}
+                media
+                selectedTarget={selectedTarget}
+                onSelectTarget={onSelectTarget}
+                path={`flow.roles[${index}].emoji`}
+                label={`${role.label} icon`}
+                field="icon"
+                className="shrink-0"
+              >
+                <span
+                  className="grid h-10 w-10 place-items-center overflow-hidden rounded-xl text-lg"
+                  style={{ background: `${t.accent}14` }}
+                >
+                  <RoleIcon value={role.emoji ?? "✦"} />
+                </span>
+              </Selectable>
+              <span className="min-w-0 flex-1">
+                <Selectable
+                  editMode={editMode}
+                  editPick={editPick}
+                  selectedTarget={selectedTarget}
+                  onSelectTarget={onSelectTarget}
+                  path={`flow.roles[${index}].label`}
+                  label={role.label}
+                  field="role label"
+                  surface={SURFACE.charcoal(role.label)}
+                  block
+                >
+                  <span className="block text-[11px] font-bold" style={{ color: t.charcoal }}>
+                    {role.label}
+                  </span>
+                </Selectable>
+                <Selectable
+                  editMode={editMode}
+                  editPick={editPick}
+                  selectedTarget={selectedTarget}
+                  onSelectTarget={onSelectTarget}
+                  path={`flow.roles[${index}].description`}
+                  label={role.label}
+                  field="description"
+                  surface={SURFACE.muted(`${role.label} description`)}
+                  block
+                  className="mt-0.5"
+                >
+                  <span className="block text-[9px] leading-snug" style={{ color: t.muted }}>
+                    {role.description}
+                  </span>
+                </Selectable>
               </span>
-              <span className="block text-[9px] leading-snug" style={{ color: t.muted }}>
-                {role.description}
-              </span>
-            </span>
-            <ChevronRight className="h-4 w-4 shrink-0" style={{ color: t.muted }} />
-          </motion.button>
-        ))}
+              <ChevronRight className="h-4 w-4 shrink-0" style={{ color: t.muted }} />
+            </>
+          );
+
+          if (editMode) {
+            return (
+              <div
+                key={role.id}
+                className="relative flex w-full items-center gap-3 rounded-2xl border p-3 text-left shadow-sm"
+                style={{ borderColor: t.line, background: "#fff" }}
+              >
+                <SurfaceSelectable
+                  overlay
+                  editMode={editMode}
+                  editPick={editPick}
+                  path="theme.card"
+                  label={`${role.label} card`}
+                  field="card background"
+                  selectedTarget={selectedTarget}
+                  onSelectTarget={onSelectTarget}
+                />
+                <div className="relative z-[1] flex w-full items-center gap-3">{cardInner}</div>
+              </div>
+            );
+          }
+
+          return (
+            <motion.button
+              key={role.id}
+              type="button"
+              whileTap={{ scale: 0.98 }}
+              onClick={() => onPick(role)}
+              className="flex w-full items-center gap-3 rounded-2xl border p-3 text-left shadow-sm"
+              style={{ borderColor: t.line, background: "#fff" }}
+            >
+              {cardInner}
+            </motion.button>
+          );
+        })}
       </div>
     </motion.div>
   );
@@ -1797,8 +2246,12 @@ function SetupWizardScreen({
   flow,
   theme,
   roleLabel,
+  editMode,
+  editPick,
+  selectedTarget,
+  onSelectTarget,
   onDone,
-}: {
+}: FixEditProps & {
   flow: ExpoAppFlow;
   theme: ExpoAppModel["theme"];
   roleLabel?: string;
@@ -1834,12 +2287,33 @@ function SetupWizardScreen({
       animate={{ opacity: 1, y: 0 }}
       className="flex h-full flex-col overflow-y-auto pb-2"
     >
-      <p className="text-[12px] font-extrabold" style={{ color: t.charcoal }}>
-        {flow.setupTitle ?? "Tell us about you"}
-      </p>
-      <p className="mt-0.5 text-[9px]" style={{ color: t.muted }}>
-        {flow.setupSubtitle ?? (roleLabel ? `Setting up as ${roleLabel}` : "Quick profile setup")}
-      </p>
+      <Selectable
+        editMode={editMode}
+          editPick={editPick}
+        selectedTarget={selectedTarget}
+        onSelectTarget={onSelectTarget}
+        path="flow.setupTitle"
+        label="Setup title"
+        field="title"
+      >
+        <p className="text-[12px] font-extrabold" style={{ color: t.charcoal }}>
+          {flow.setupTitle ?? "Tell us about you"}
+        </p>
+      </Selectable>
+      <Selectable
+        editMode={editMode}
+          editPick={editPick}
+        selectedTarget={selectedTarget}
+        onSelectTarget={onSelectTarget}
+        path="flow.setupSubtitle"
+        label="Setup subtitle"
+        field="subtitle"
+        className="mt-0.5"
+      >
+        <p className="text-[9px]" style={{ color: t.muted }}>
+          {flow.setupSubtitle ?? (roleLabel ? `Setting up as ${roleLabel}` : "Quick profile setup")}
+        </p>
+      </Selectable>
       <div className="mt-3 space-y-2.5">
         {fields.map((field) => {
           const section = field.section;
@@ -1907,16 +2381,32 @@ function SetupWizardScreen({
           );
         })}
       </div>
-      <motion.button
-        type="button"
-        whileTap={{ scale: 0.97 }}
-        disabled={!requiredOk}
-        onClick={onDone}
-        className="mt-4 w-full rounded-2xl py-2.5 text-[10px] font-bold text-white disabled:opacity-45"
-        style={{ background: t.accent }}
+      <Selectable
+        editMode={editMode}
+        editPick={editPick}
+        selectedTarget={selectedTarget}
+        onSelectTarget={onSelectTarget}
+        path="flow.setupTitle"
+        label="Get started button"
+        field="button"
+        surface={SURFACE.accent("Get started button")}
+        block
+        className="mt-4"
       >
-        Get Started →
-      </motion.button>
+        <motion.button
+          type="button"
+          whileTap={editMode ? undefined : { scale: 0.97 }}
+          disabled={!editMode && !requiredOk}
+          onClick={() => {
+            if (editMode) return;
+            onDone();
+          }}
+          className="w-full rounded-2xl py-2.5 text-[10px] font-bold text-white disabled:opacity-45"
+          style={{ background: t.accent }}
+        >
+          Get Started →
+        </motion.button>
+      </Selectable>
     </motion.div>
   );
 }
@@ -1926,7 +2416,11 @@ function Onboarding({
   idx,
   onNext,
   onSkip,
-}: {
+  editMode,
+  editPick,
+  selectedTarget,
+  onSelectTarget,
+}: FixEditProps & {
   model: ExpoAppModel;
   idx: number;
   onNext: () => void;
@@ -1961,11 +2455,24 @@ function Onboarding({
           background: `linear-gradient(145deg, ${t.accent}22 0%, ${t.cream} 55%, ${t.card} 100%)`,
         }}
       >
-        <CoverImage
-          src={slide.imageUrl}
-          category={model.category}
-          className="h-full w-full object-cover"
-        />
+        <Selectable
+          editMode={editMode}
+          editPick={editPick}
+          media
+          path={`onboarding[${idx}].imageUrl`}
+          label="Onboarding image"
+          field="image"
+          selectedTarget={selectedTarget}
+          onSelectTarget={onSelectTarget}
+          block
+          className="absolute inset-0 z-[2]"
+        >
+          <CoverImage
+            src={slide.imageUrl}
+            category={model.category}
+            className="h-full w-full object-cover"
+          />
+        </Selectable>
         <div
           className="absolute inset-0 backdrop-blur-[1px]"
           style={{
@@ -1982,24 +2489,47 @@ function Onboarding({
           </span>
         )}
       </div>
-      <motion.p
-        initial={{ opacity: 0, y: 8 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ delay: 0.06 }}
-        className="text-[13px] font-extrabold leading-tight"
-        style={{ color: t.charcoal }}
+      <Selectable
+        editMode={editMode}
+          editPick={editPick}
+        selectedTarget={selectedTarget}
+        onSelectTarget={onSelectTarget}
+        path={`onboarding[${idx}].title`}
+        label="Onboarding title"
+        field="title"
+        surface={SURFACE.charcoal("Onboarding title")}
       >
-        {slide.title}
-      </motion.p>
-      <motion.p
-        initial={{ opacity: 0, y: 8 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ delay: 0.12 }}
-        className="mt-1 flex-1 text-[9px] leading-snug"
-        style={{ color: t.muted }}
+        <motion.p
+          initial={{ opacity: 0, y: 8 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.06 }}
+          className="text-[13px] font-extrabold leading-tight"
+          style={{ color: t.charcoal }}
+        >
+          {slide.title}
+        </motion.p>
+      </Selectable>
+      <Selectable
+        editMode={editMode}
+          editPick={editPick}
+        selectedTarget={selectedTarget}
+        onSelectTarget={onSelectTarget}
+        path={`onboarding[${idx}].subtitle`}
+        label="Onboarding subtitle"
+        field="subtitle"
+        surface={SURFACE.muted("Onboarding subtitle")}
+        className="mt-1 flex-1"
       >
-        {slide.subtitle}
-      </motion.p>
+        <motion.p
+          initial={{ opacity: 0, y: 8 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.12 }}
+          className="text-[9px] leading-snug"
+          style={{ color: t.muted }}
+        >
+          {slide.subtitle}
+        </motion.p>
+      </Selectable>
       <div className="mb-2 flex justify-center gap-1.5">
         {model.onboarding.map((_, i) => (
           <span
@@ -2012,21 +2542,39 @@ function Onboarding({
           />
         ))}
       </div>
-      <motion.button
-        type="button"
-        whileTap={{ scale: 0.97 }}
-        onClick={onNext}
-        className="w-full rounded-2xl py-2.5 text-[10px] font-bold text-white shadow-soft"
-        style={{
-          background: `linear-gradient(135deg, ${t.accent} 0%, ${t.charcoal} 140%)`,
-        }}
+      <Selectable
+        editMode={editMode}
+          editPick={editPick}
+        selectedTarget={selectedTarget}
+        onSelectTarget={onSelectTarget}
+        path={`onboarding[${idx}].ctaLabel`}
+        label="Onboarding button"
+        field="button"
+        surface={SURFACE.accent("Onboarding button")}
+        block
       >
-        {cta}
-      </motion.button>
+        <motion.button
+          type="button"
+          whileTap={editMode ? undefined : { scale: 0.97 }}
+          onClick={() => {
+            if (editMode) return;
+            onNext();
+          }}
+          className="w-full rounded-2xl py-2.5 text-[10px] font-bold text-white shadow-soft"
+          style={{
+            background: `linear-gradient(135deg, ${t.accent} 0%, ${t.charcoal} 140%)`,
+          }}
+        >
+          {cta}
+        </motion.button>
+      </Selectable>
       {!isLast && (
         <button
           type="button"
-          onClick={onSkip}
+          onClick={() => {
+            if (editMode) return;
+            onSkip();
+          }}
           className="mt-1.5 text-center text-[9px] font-semibold"
           style={{ color: t.muted }}
         >
@@ -2037,18 +2585,16 @@ function Onboarding({
   );
 }
 
-type FixEditProps = {
-  editMode?: boolean;
-  selectedPath?: string | null;
-  onSelectTarget?: (target: TweakTarget) => void;
-};
-
 function Selectable({
   editMode,
+  editPick,
   path,
   label,
   field,
-  selectedPath,
+  surface,
+  content = true,
+  media = false,
+  selectedTarget,
   onSelectTarget,
   children,
   className,
@@ -2058,6 +2604,12 @@ function Selectable({
   path: string;
   label: string;
   field: string;
+  /** When Colors mode is on, tap selects this color token instead of copy. */
+  surface?: PickSurface;
+  /** When false, only the color chip is tappable (e.g. icon tint). */
+  content?: boolean;
+  /** Icon or image — tappable in both Text and Colors modes. */
+  media?: boolean;
   children: ReactNode;
   className?: string;
   style?: CSSProperties;
@@ -2065,11 +2617,20 @@ function Selectable({
   block?: boolean;
 }) {
   if (!editMode || !onSelectTarget) return <>{children}</>;
-  const selected = selectedPath === path;
+
+  const isSurface = editPick === "surface" && !media;
+  if (isSurface && !surface) return <>{children}</>;
+  if (!isSurface && !content && !media) return <>{children}</>;
+
+  const target = isSurface
+    ? { path: surface!.path, label: surface!.label, field: surface!.field }
+    : { path, label, field };
+
+  const selected = isTargetSelected(selectedTarget, target);
   const pick = (e: { stopPropagation: () => void; preventDefault: () => void }) => {
     e.stopPropagation();
     e.preventDefault();
-    onSelectTarget({ path, label, field });
+    onSelectTarget(target);
   };
   return (
     <div
@@ -2083,12 +2644,13 @@ function Selectable({
       className={cn(
         className,
         block && "block w-full cursor-pointer",
-        "relative z-[1] touch-manipulation rounded-xl transition",
+        "pointer-events-auto relative z-[2] touch-manipulation rounded-xl transition",
         selected
-          ? "ring-2 ring-coral ring-offset-1 ring-offset-transparent"
-          : "hover:ring-2 hover:ring-coral/45 active:ring-2 active:ring-coral/55"
+          ? "border-2 border-coral shadow-[0_0_0_2px_rgba(255,122,99,0.15)]"
+          : "border-2 border-transparent hover:border-coral/35 active:border-coral/50"
       )}
     >
+      {selected && <SelectionMarker />}
       {children}
     </div>
   );
@@ -2104,7 +2666,8 @@ function HomeScreen({
   scanning,
   recording,
   editMode,
-  selectedPath,
+  editPick,
+  selectedTarget,
   onSelectTarget,
 }: FixEditProps & {
   model: ExpoAppModel;
@@ -2123,10 +2686,12 @@ function HomeScreen({
     <div className="h-full overflow-y-auto pb-2">
       <Selectable
         editMode={editMode}
+          editPick={editPick}
         path="home.headline"
         label="Home headline"
         field="Headline"
-        selectedPath={selectedPath}
+        surface={SURFACE.charcoal("Home headline")}
+        selectedTarget={selectedTarget}
         onSelectTarget={onSelectTarget}
         block
         className="py-0.5"
@@ -2144,10 +2709,12 @@ function HomeScreen({
       </Selectable>
       <Selectable
         editMode={editMode}
+          editPick={editPick}
         path="home.subheadline"
         label="Home subheadline"
         field="Subheadline"
-        selectedPath={selectedPath}
+        surface={SURFACE.muted("Home subheadline")}
+        selectedTarget={selectedTarget}
         onSelectTarget={onSelectTarget}
         block
         className="mt-0.5 py-0.5"
@@ -2166,54 +2733,56 @@ function HomeScreen({
 
       <Selectable
         editMode={editMode}
+        editPick={editPick}
         path="home.heroLabel"
         label="Main button"
         field="Hero button"
-        selectedPath={selectedPath}
+        surface={SURFACE.accent("Main button")}
+        selectedTarget={selectedTarget}
         onSelectTarget={onSelectTarget}
         block
         className="mt-2.5"
       >
-      <motion.div
-        variants={fadeUp}
-        custom={2}
-        initial="hidden"
-        animate="show"
-        className={cn(
-          "flex w-full items-center gap-2 rounded-2xl p-2.5 text-left shadow-soft",
-          !editMode && "cursor-pointer"
-        )}
-        style={{ background: t.accent }}
-        {...(!editMode
-          ? {
-              role: "button" as const,
-              tabIndex: 0,
-              onClick: onHero,
-              onKeyDown: (e: KeyboardEvent) => {
-                if (e.key === "Enter" || e.key === " ") onHero();
-              },
-            }
-          : {})}
-      >
-        <motion.span
-          animate={hasScan ? { scale: [1, 1.06, 1] } : undefined}
-          transition={{ duration: 2.2, repeat: Infinity }}
-          className="grid h-8 w-8 place-items-center rounded-xl bg-white/20"
-        >
-          {hasScan ? (
-            <Camera className="h-4 w-4 text-white" />
-          ) : (
-            <ChevronRight className="h-4 w-4 text-white" />
+        <motion.div
+          variants={fadeUp}
+          custom={2}
+          initial="hidden"
+          animate="show"
+          className={cn(
+            "flex w-full items-center gap-2 rounded-2xl p-2.5 text-left shadow-soft",
+            !editMode && "cursor-pointer"
           )}
-        </motion.span>
-        <span className="min-w-0 flex-1">
-          <span className="block text-[9px] font-bold text-white">{h.heroLabel}</span>
-          <span className="block truncate text-[9px] text-white/85">
-            {scanning ? "Analyzing with AI vision…" : h.heroSublabel}
+          style={{ background: t.accent }}
+          {...(!editMode
+            ? {
+                role: "button" as const,
+                tabIndex: 0,
+                onClick: onHero,
+                onKeyDown: (e: KeyboardEvent) => {
+                  if (e.key === "Enter" || e.key === " ") onHero();
+                },
+              }
+            : {})}
+        >
+          <motion.span
+            animate={hasScan ? { scale: [1, 1.06, 1] } : undefined}
+            transition={{ duration: 2.2, repeat: Infinity }}
+            className="grid h-8 w-8 place-items-center rounded-xl bg-white/20"
+          >
+            {hasScan ? (
+              <Camera className="h-4 w-4 text-white" />
+            ) : (
+              <ChevronRight className="h-4 w-4 text-white" />
+            )}
+          </motion.span>
+          <span className="min-w-0 flex-1">
+            <span className="block text-[9px] font-bold text-white">{h.heroLabel}</span>
+            <span className="block truncate text-[9px] text-white/85">
+              {scanning ? "Analyzing with AI vision…" : h.heroSublabel}
+            </span>
           </span>
-        </span>
-        <ChevronRight className="h-3.5 w-3.5 shrink-0 text-white/80" />
-      </motion.div>
+          <ChevronRight className="h-3.5 w-3.5 shrink-0 text-white/80" />
+        </motion.div>
       </Selectable>
 
       {onVoice && (
@@ -2252,10 +2821,11 @@ function HomeScreen({
         <div key={sec.title} className="mt-3">
           <Selectable
             editMode={editMode}
+          editPick={editPick}
             path={`home.sections[${si}].title`}
             label={sec.title}
             field="Section title"
-            selectedPath={selectedPath}
+            selectedTarget={selectedTarget}
             onSelectTarget={onSelectTarget}
             block
             className="mb-1.5"
@@ -2276,7 +2846,8 @@ function HomeScreen({
                 theme={t}
                 index={si * 3 + i + 3}
                 editMode={editMode}
-                selectedPath={selectedPath}
+          editPick={editPick}
+                selectedTarget={selectedTarget}
                 onSelectTarget={onSelectTarget}
                 onOpen={() => onOpen(item)}
                 onPrimaryAction={onPrimaryAction}
@@ -2301,7 +2872,8 @@ function TabScreen({
   extraItems,
   onShareList,
   editMode,
-  selectedPath,
+  editPick,
+  selectedTarget,
   onSelectTarget,
 }: FixEditProps & {
   screen: ExpoAppModel["tabScreens"][string] | undefined;
@@ -2328,10 +2900,11 @@ function TabScreen({
         <div className="min-w-0">
           <Selectable
             editMode={editMode}
+          editPick={editPick}
             path={`tabScreens.${tabId}.title`}
             label={`${tabId} tab title`}
             field="Tab title"
-            selectedPath={selectedPath}
+            selectedTarget={selectedTarget}
             onSelectTarget={onSelectTarget}
             block
             className="py-0.5"
@@ -2342,10 +2915,11 @@ function TabScreen({
           </Selectable>
           <Selectable
             editMode={editMode}
+          editPick={editPick}
             path={`tabScreens.${tabId}.subtitle`}
             label={`${tabId} tab subtitle`}
             field="Tab subtitle"
-            selectedPath={selectedPath}
+            selectedTarget={selectedTarget}
             onSelectTarget={onSelectTarget}
             block
             className="py-0.5"
@@ -2374,10 +2948,12 @@ function TabScreen({
               <Selectable
                 key={item.id}
                 editMode={editMode}
+          editPick={editPick}
                 path={`tabScreens.${tabId}.items[${i}].title`}
                 label={item.title}
                 field="List item"
-                selectedPath={selectedPath}
+                surface={SURFACE.card(item.title)}
+                selectedTarget={selectedTarget}
                 onSelectTarget={onSelectTarget}
                 block
                 className="rounded-xl border p-2"
@@ -2443,7 +3019,8 @@ function TabScreen({
               theme={t}
               index={i}
               editMode={editMode}
-              selectedPath={selectedPath}
+          editPick={editPick}
+              selectedTarget={selectedTarget}
               onSelectTarget={onSelectTarget}
               onOpen={() => onOpen(item)}
               onPrimaryAction={onPrimaryAction}
@@ -2458,7 +3035,8 @@ function TabScreen({
             theme={t}
             index={screen.items.length + i}
             editMode={editMode}
-            selectedPath={selectedPath}
+          editPick={editPick}
+            selectedTarget={selectedTarget}
             onSelectTarget={onSelectTarget}
             onOpen={() => onOpen(item)}
             onPrimaryAction={onPrimaryAction}
@@ -2477,7 +3055,8 @@ function ItemCard({
   onOpen,
   onPrimaryAction,
   editMode,
-  selectedPath,
+  editPick,
+  selectedTarget,
   onSelectTarget,
 }: FixEditProps & {
   item: ExpoListItem;
@@ -2538,46 +3117,70 @@ function ItemCard({
   );
 
   return (
-    <motion.div
-      variants={fadeUp}
-      custom={index}
-      initial="hidden"
-      animate="show"
-      className="overflow-hidden rounded-2xl border text-left shadow-sm"
-      style={{ borderColor: theme.line, background: "#fff" }}
+    <SurfaceSelectable
+      editMode={editMode}
+      editPick={editPick}
+      path="theme.card"
+      label={`${cardLabel} card`}
+      field="card background"
+      selectedTarget={selectedTarget}
+      onSelectTarget={onSelectTarget}
+      block
     >
+      <motion.div
+        variants={fadeUp}
+        custom={index}
+        initial="hidden"
+        animate="show"
+        className="overflow-hidden rounded-2xl border text-left shadow-sm"
+        style={{ borderColor: theme.line, background: theme.card }}
+      >
       {canFix ? (
         <div className="p-2">
-          <Selectable
-            editMode={editMode}
-            path={`${base}.title`}
-            label={cardLabel}
-            field="Card title"
-            selectedPath={selectedPath}
-            onSelectTarget={onSelectTarget}
-            block
-            className="py-1"
-          >
-            <div className="flex w-full gap-2 text-left">
+          <div className="flex w-full gap-2 text-left py-1">
+            <Selectable
+              editMode={editMode}
+              editPick={editPick}
+              media
+              path={`${base}.imageUrl`}
+              label={cardLabel}
+              field="image"
+              selectedTarget={selectedTarget}
+              onSelectTarget={onSelectTarget}
+              className="shrink-0"
+            >
               <CoverImage
                 src={item.imageUrl}
                 fallbackIndex={index}
-                className="h-11 w-11 shrink-0 rounded-xl object-cover"
+                className="h-11 w-11 rounded-xl object-cover"
               />
-              <span className="min-w-0 flex-1 py-0.5">
-                {tagsRow}
-                <span className="mt-0.5 block text-[10px] font-bold leading-tight" style={{ color: theme.charcoal }}>
-                  {item.title}
-                </span>
+            </Selectable>
+            <Selectable
+              editMode={editMode}
+              editPick={editPick}
+              path={`${base}.title`}
+              label={cardLabel}
+              field="Card title"
+              surface={SURFACE.charcoal(`${cardLabel} title`)}
+              selectedTarget={selectedTarget}
+              onSelectTarget={onSelectTarget}
+              block
+              className="min-w-0 flex-1 py-0.5"
+            >
+              {tagsRow}
+              <span className="mt-0.5 block text-[10px] font-bold leading-tight" style={{ color: theme.charcoal }}>
+                {item.title}
               </span>
-            </div>
-          </Selectable>
+            </Selectable>
+          </div>
           <Selectable
             editMode={editMode}
+          editPick={editPick}
             path={`${base}.subtitle`}
             label={cardLabel}
             field="Card subtitle"
-            selectedPath={selectedPath}
+            surface={SURFACE.muted(`${cardLabel} subtitle`)}
+            selectedTarget={selectedTarget}
             onSelectTarget={onSelectTarget}
             block
             className="mt-1 py-1 pl-[3.25rem]"
@@ -2600,10 +3203,11 @@ function ItemCard({
       {item.quote && (
         <Selectable
           editMode={canFix}
+          editPick={editPick}
           path={`${base}.quote`}
           label={cardLabel}
           field="Quote"
-          selectedPath={selectedPath}
+          selectedTarget={selectedTarget}
           onSelectTarget={onSelectTarget}
           block
           className="mx-2 mb-2"
@@ -2620,10 +3224,12 @@ function ItemCard({
         (canFix ? (
           <Selectable
             editMode={editMode}
+          editPick={editPick}
             path={`${base}.primaryAction`}
             label={cardLabel}
             field="Button label"
-            selectedPath={selectedPath}
+            surface={SURFACE.accent(`${cardLabel} button`)}
+            selectedTarget={selectedTarget}
             onSelectTarget={onSelectTarget}
             block
             className="mx-2 mb-2"
@@ -2649,7 +3255,8 @@ function ItemCard({
             {item.primaryAction}
           </button>
         ))}
-    </motion.div>
+      </motion.div>
+    </SurfaceSelectable>
   );
 }
 
@@ -2659,7 +3266,8 @@ function ProfileScreen({
   savedStatPatterns,
   onSetting,
   editMode,
-  selectedPath,
+  editPick,
+  selectedTarget,
   onSelectTarget,
 }: FixEditProps & {
   model: ExpoAppModel;
@@ -2680,19 +3288,31 @@ function ProfileScreen({
   return (
     <div className="h-full overflow-y-auto pb-2">
       <div className="flex items-center gap-2">
-        <span
-          className="grid h-10 w-10 place-items-center rounded-2xl text-sm font-bold text-white"
-          style={{ background: t.accent }}
+        <Selectable
+          editMode={editMode}
+          editPick={editPick}
+          path="profile.displayName"
+          label="Profile avatar"
+          field="avatar"
+          surface={SURFACE.accent("Profile avatar")}
+          selectedTarget={selectedTarget}
+          onSelectTarget={onSelectTarget}
         >
-          {p.displayName.charAt(0)}
-        </span>
+          <span
+            className="grid h-10 w-10 place-items-center rounded-2xl text-sm font-bold text-white"
+            style={{ background: t.accent }}
+          >
+            {p.displayName.charAt(0)}
+          </span>
+        </Selectable>
         <div>
           <Selectable
             editMode={editMode}
+          editPick={editPick}
             path="profile.displayName"
             label="Profile name"
             field="Display name"
-            selectedPath={selectedPath}
+            selectedTarget={selectedTarget}
             onSelectTarget={onSelectTarget}
           >
             <p className="text-[11px] font-extrabold" style={{ color: t.charcoal }}>
@@ -2701,10 +3321,11 @@ function ProfileScreen({
           </Selectable>
           <Selectable
             editMode={editMode}
+          editPick={editPick}
             path="profile.tagline"
             label="Profile tagline"
             field="Tagline"
-            selectedPath={selectedPath}
+            selectedTarget={selectedTarget}
             onSelectTarget={onSelectTarget}
           >
             <p className="text-[9px]" style={{ color: t.muted }}>
@@ -2752,10 +3373,12 @@ function ProfileScreen({
               <Selectable
                 key={row.label}
                 editMode={editMode}
+          editPick={editPick}
                 path={`profile.settings[${ri}].label`}
                 label={row.label}
                 field="Settings row"
-                selectedPath={selectedPath}
+                surface={SURFACE.card(row.label)}
+                selectedTarget={selectedTarget}
                 onSelectTarget={onSelectTarget}
                 block
                 className="rounded-xl border px-2 py-2.5"
@@ -2788,7 +3411,8 @@ function TabBar({
   theme,
   onSelect,
   editMode,
-  selectedPath,
+  editPick,
+  selectedTarget,
   onSelectTarget,
 }: FixEditProps & {
   tabs: ExpoAppModel["tabs"];
@@ -2797,7 +3421,14 @@ function TabBar({
   onSelect: (id: string) => void;
 }) {
   return (
-    <div
+    <SurfaceSelectable
+      editMode={editMode}
+      editPick={editPick}
+      path="theme.card"
+      label="Tab bar"
+      field="bar background"
+      selectedTarget={selectedTarget}
+      onSelectTarget={onSelectTarget}
       className="flex shrink-0 border-t px-0.5 py-1"
       style={{ borderColor: theme.line, background: theme.card }}
     >
@@ -2823,10 +3454,12 @@ function TabBar({
             <Selectable
               key={tab.id}
               editMode={editMode}
+          editPick={editPick}
               path={`tabs[${ti}].label`}
               label={`${tab.label} tab`}
               field="Tab label"
-              selectedPath={selectedPath}
+              surface={SURFACE.accent(`${tab.label} tab`)}
+              selectedTarget={selectedTarget}
               onSelectTarget={onSelectTarget}
               block
               className="flex flex-1 flex-col items-center gap-0.5 py-1.5"
@@ -2846,7 +3479,7 @@ function TabBar({
           </button>
         );
       })}
-    </div>
+    </SurfaceSelectable>
   );
 }
 
