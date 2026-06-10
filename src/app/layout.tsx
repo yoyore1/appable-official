@@ -1,11 +1,12 @@
 import type { Metadata, Viewport } from "next";
+import { appUrl } from "@/lib/config";
 import "./globals.css";
 
 export const metadata: Metadata = {
   title: "Appable — Build your first app free",
   description:
     "You have an idea. We'll turn it into a real app on the App Store. No coding. Seriously.",
-  metadataBase: new URL(process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000"),
+  metadataBase: new URL(appUrl),
   openGraph: {
     title: "Appable — Build your first app free",
     description: "Turn your idea into a real iOS app. No coding.",

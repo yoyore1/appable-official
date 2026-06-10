@@ -21,7 +21,15 @@ function num(key: string, fallback: number): number {
   return Number.isFinite(n) ? n : fallback;
 }
 
-export const appUrl = env("NEXT_PUBLIC_APP_URL") ?? "http://localhost:3000";
+function normalizeAppUrl(raw: string | undefined): string {
+  const v = raw?.trim();
+  if (!v) return "http://localhost:3000";
+  if (/^https?:\/\//i.test(v)) return v.replace(/\/$/, "");
+  // Railway users often paste the hostname without a scheme.
+  return `https://${v.replace(/\/$/, "")}`;
+}
+
+export const appUrl = normalizeAppUrl(env("NEXT_PUBLIC_APP_URL"));
 export const serviceKey = env("APPABLE_SERVICE_KEY") ?? "dev-service-key";
 
 /** Shared DeepInfra key — one key routes to all DeepInfra models. */
