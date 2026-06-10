@@ -1344,12 +1344,17 @@ export function ExpoBuildRoom({
       ]);
       setPhase("done");
       setBudgetKey((k) => k + 1);
-    } catch {
+    } catch (err) {
       clearBuildTimers();
-      setBubbles((b) => [
-        ...b,
-        { id: "err", role: "ai", text: "Hit a snag — try Confirm again in a sec." },
-      ]);
+      const detail = err instanceof Error ? err.message : String(err);
+      const friendly =
+        detail === "AI_CAP_REACHED"
+          ? "You've hit the AI usage cap — top up to keep building."
+          : detail === "NO_PROMPT"
+            ? "Finish the interview first, then Confirm to build."
+            : `Hit a snag building: ${detail}. Try Confirm again in a sec.`;
+      console.error("[expo build] failed:", err);
+      setBubbles((b) => [...b, { id: "err", role: "ai", text: friendly }]);
       setPhase("summary");
     } finally {
       clearBuildTimers();

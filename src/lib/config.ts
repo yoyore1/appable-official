@@ -93,14 +93,16 @@ export const integrations = {
   stripe: Boolean(env("STRIPE_SECRET_KEY")),
   chatModel: Boolean(deepinfraKey()),
   cheapTextModel: Boolean(deepinfraKey()),
-  /** Kimi (or other strong model) for master-plan synthesis — separate from cheap chat. */
+  /** Kimi (or other strong model) for master-plan synthesis — falls back to DeepInfra. */
   planModel: Boolean(
     (env("BUILD_MODEL_BASE_URL") && env("BUILD_MODEL_KEY")) ||
-      (env("CHAT_MODEL_BASE_URL") && env("CHAT_MODEL_KEY"))
+      (env("CHAT_MODEL_BASE_URL") && env("CHAT_MODEL_KEY")) ||
+      deepinfraKey()
   ),
   appCodeModel: Boolean(
     (env("BUILD_MODEL_BASE_URL") && env("BUILD_MODEL_KEY")) ||
-      (env("CHAT_MODEL_BASE_URL") && env("CHAT_MODEL_KEY"))
+      (env("CHAT_MODEL_BASE_URL") && env("CHAT_MODEL_KEY")) ||
+      deepinfraKey()
   ),
   deepinfra: Boolean(deepinfraKey()),
   visionModel: Boolean(deepinfraKey()),
@@ -174,8 +176,11 @@ export const suggestIdeasModel = {
 };
 
 export const appCodeModel = {
-  baseUrl: env("BUILD_MODEL_BASE_URL") ?? env("CHAT_MODEL_BASE_URL"),
-  key: env("BUILD_MODEL_KEY") ?? env("CHAT_MODEL_KEY"),
+  baseUrl:
+    env("BUILD_MODEL_BASE_URL") ??
+    env("CHAT_MODEL_BASE_URL") ??
+    deepinfra.openaiBase,
+  key: env("BUILD_MODEL_KEY") ?? env("CHAT_MODEL_KEY") ?? deepinfraKey(),
   name: env("BUILD_MODEL_NAME") ?? "moonshotai/Kimi-K2.6",
 };
 

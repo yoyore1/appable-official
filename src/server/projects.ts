@@ -525,11 +525,17 @@ export async function runExpoWebBuild(
     percent: 92,
   });
 
-  // Self-healing: repair package.json → npm install → web compile → Metro (blocks until preview ready).
-  const { bootstrapWorkspaceRuntimeBlocking } = await import(
+  // Self-healing: repair package.json → npm install → web compile → Metro.
+  // Best-effort: the app + model are already saved, so a slow/failed first
+  // compile must not throw away the build. The preview polls until ready.
+  const { bootstrapWorkspaceRuntime } = await import(
     "@/lib/codeAgent/workspaceRuntime"
   );
-  await bootstrapWorkspaceRuntimeBlocking(projectId);
+  try {
+    bootstrapWorkspaceRuntime(projectId);
+  } catch (err) {
+    console.error("[expo build] runtime bootstrap failed:", err);
+  }
 
   revalidatePath(`/project/${projectId}`);
   setTimeout(() => clearBuildProgress(projectId), 60_000);
