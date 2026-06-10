@@ -158,7 +158,9 @@ async function rewriteCopy(
     `Task: ${rewriteTask(message)}\n\n` +
     `Write the new line only.`;
 
-  if (!integrations.expoBuildModel) return "";
+  // buildChatComplete falls back to the DeepInfra plan model when Fireworks
+  // is absent, so only bail when neither model is configured.
+  if (!integrations.expoBuildModel && !integrations.planModel) return "";
 
   const { text } = await buildChatComplete(
     [

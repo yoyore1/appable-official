@@ -162,15 +162,35 @@ export async function buildChatComplete(
     timeoutMs?: number;
   } = {}
 ): Promise<AiChatResult> {
-  if (!integrations.expoBuildModel) {
-    return { text: "", costUsd: 0 };
+  if (integrations.expoBuildModel) {
+    const fw = await chatCompleteWithModel(
+      messages,
+      opts,
+      expoBuildModel,
+      "buildChatComplete"
+    );
+    if (fw.text) return fw;
+    // Fireworks unreachable/empty (bad key, model name, rate limit) — fall back
+    // to the DeepInfra plan model so edits keep working with the key that works.
+    if (integrations.planModel) {
+      return chatCompleteWithModel(
+        messages,
+        opts,
+        planModel,
+        "buildChatCompletePlanFallback"
+      );
+    }
+    return fw;
   }
-  return chatCompleteWithModel(
-    messages,
-    opts,
-    expoBuildModel,
-    "buildChatComplete"
-  );
+  if (integrations.planModel) {
+    return chatCompleteWithModel(
+      messages,
+      opts,
+      planModel,
+      "buildChatCompletePlanFallback"
+    );
+  }
+  return { text: "", costUsd: 0 };
 }
 
 /** Code agent — Fireworks Kimi; initial build may fall back to plan model. */
@@ -185,14 +205,22 @@ export async function codeAgentChatComplete(
   } = {}
 ): Promise<AiChatResult> {
   if (integrations.expoBuildModel) {
-    return chatCompleteWithModel(
+    const fw = await chatCompleteWithModel(
       messages,
       opts,
       expoBuildModel,
       "codeAgentChatComplete"
     );
+    if (fw.text || !integrations.planModel) return fw;
+    // Fireworks empty/unreachable — fall back to DeepInfra so edits still apply.
+    return chatCompleteWithModel(
+      messages,
+      opts,
+      planModel,
+      "codeAgentChatCompletePlanFallback"
+    );
   }
-  if (opts.allowPlanFallback && integrations.planModel) {
+  if (integrations.planModel) {
     return chatCompleteWithModel(
       messages,
       opts,

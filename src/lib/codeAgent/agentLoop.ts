@@ -79,8 +79,7 @@ export async function runCodeAgentLoop(input: {
   asked?: string;
 }> {
   const canRunAgent =
-    integrations.expoBuildModel ||
-    (input.mode === "initial" && integrations.planModel);
+    integrations.expoBuildModel || integrations.planModel;
   if (!canRunAgent) {
     return {
       steps: [],

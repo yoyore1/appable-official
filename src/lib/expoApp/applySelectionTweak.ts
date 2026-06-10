@@ -111,7 +111,9 @@ async function rewriteLineCopy(
     `Rewrite task: ${task}\n\n` +
     `Write a different line that satisfies the task. Do not repeat the current line verbatim.`;
 
-  if (!integrations.expoBuildModel) {
+  // buildChatComplete falls back to the DeepInfra plan model when Fireworks is
+  // absent; only use the local heuristic when no AI model is configured at all.
+  if (!integrations.expoBuildModel && !integrations.planModel) {
     return chipRewriteFallback(current, task, path, mp.appName);
   }
 

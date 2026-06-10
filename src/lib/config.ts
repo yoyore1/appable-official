@@ -22,14 +22,34 @@ function num(key: string, fallback: number): number {
 }
 
 function normalizeAppUrl(raw: string | undefined): string {
-  const v = raw?.trim();
+  const v = raw?.trim().replace(/^["']|["']$/g, "");
   if (!v) return "http://localhost:3000";
-  if (/^https?:\/\//i.test(v)) return v.replace(/\/$/, "");
-  // Railway users often paste the hostname without a scheme.
-  return `https://${v.replace(/\/$/, "")}`;
+  const candidate = /^https?:\/\//i.test(v)
+    ? v.replace(/\/$/, "")
+    : `https://${v.replace(/\/$/, "")}`;
+  try {
+    const parsed = new URL(candidate);
+    if (!parsed.hostname) throw new Error("missing hostname");
+    return parsed.origin;
+  } catch {
+    console.warn(
+      "[config] Invalid NEXT_PUBLIC_APP_URL — using http://localhost:3000 fallback:",
+      raw
+    );
+    return "http://localhost:3000";
+  }
 }
 
 export const appUrl = normalizeAppUrl(env("NEXT_PUBLIC_APP_URL"));
+
+/** Safe for Next.js metadataBase — never throws on bad env. */
+export function metadataBaseUrl(): URL {
+  try {
+    return new URL(appUrl);
+  } catch {
+    return new URL("http://localhost:3000");
+  }
+}
 export const serviceKey = env("APPABLE_SERVICE_KEY") ?? "dev-service-key";
 
 /** Shared DeepInfra key — one key routes to all DeepInfra models. */

@@ -24,7 +24,7 @@ export function parseRenamePair(message: string): RenamePair | null {
   if (!m) return null;
 
   const patterns: RegExp[] = [
-    /instead\s+of\s+["']?([^"']+?)["']?\s+make\s+it\s+["']?([^"'.?!]+)["']?/i,
+    /instead\s+of\s+["']?([^"']+?)["']?\s+make\s+it\s+(?:say\s+)?["']?([^"'.?!]+)["']?/i,
     /(?:make it say|say|use|change (?:it )?to)\s+(.+?)\s+instead\s+of\s+(.+?)$/i,
     /rename\s+(?:the\s+)?(?:app\s+)?(?:to\s+)?["']?([^"']+?)["']?\s+to\s+["']?([^"'.?!]+)["']?/i,
     /rename\s+(?:it\s+)?to\s+["']?([^"'.?!]+)["']?/i,
@@ -35,14 +35,19 @@ export function parseRenamePair(message: string): RenamePair | null {
     const hit = m.match(re);
     if (!hit?.[1]) continue;
     if (re.source.includes("rename") && hit[2] === undefined) {
-      return { from: "", to: titleCaseWord(hit[1]!) };
+      return { from: "", to: titleCaseWord(stripSayPrefix(hit[1]!)) };
     }
-    const from = hit[1]!.trim().replace(/[.?!]+$/, "");
-    const to = hit[2]!.trim().replace(/[.?!]+$/, "");
+    const from = stripSayPrefix(hit[1]!.trim()).replace(/[.?!]+$/, "");
+    const to = stripSayPrefix(hit[2]!.trim()).replace(/[.?!]+$/, "");
     if (from && to) return { from, to };
   }
 
   return null;
+}
+
+/** Drop a leading "say"/"it say" so "make it say X" yields the target text X. */
+function stripSayPrefix(s: string): string {
+  return s.trim().replace(/^(?:it\s+)?say\s+/i, "").trim();
 }
 
 function replaceInString(value: string, pair: RenamePair): string {
@@ -127,11 +132,17 @@ export function renameWasApplied(
 
   const keyBlob = `${welcome} ${display}`;
   if (keyBlob.includes(needle)) return false;
-  if (!keyBlob.includes(toNeedle) && !keyBlob.includes(pair.to.toLowerCase())) {
-    const beforeBlob = JSON.stringify(before).toLowerCase();
-    const afterBlob = JSON.stringify(after).toLowerCase();
-    if (beforeBlob.includes(needle) && afterBlob.includes(toNeedle)) return true;
-    return false;
+  if (keyBlob.includes(toNeedle) || keyBlob.includes(pair.to.toLowerCase())) {
+    return true;
   }
-  return true;
+
+  // The rename target may have landed on a non-title field (e.g. a copy edit
+  // phrased as "instead of X make it Y"). Accept it as applied when the target
+  // text is now present somewhere it wasn't, or the model meaningfully changed.
+  const beforeBlob = JSON.stringify(before).toLowerCase();
+  const afterBlob = JSON.stringify(after).toLowerCase();
+  if (afterBlob.includes(toNeedle) || afterBlob.includes(pair.to.toLowerCase())) {
+    return true;
+  }
+  return beforeBlob.includes(needle) && afterBlob !== beforeBlob;
 }
