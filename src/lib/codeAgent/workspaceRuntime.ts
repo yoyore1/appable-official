@@ -19,6 +19,7 @@ import {
 } from "./workspaceHealth";
 import { workspaceDevServerSnapshot } from "@/lib/expoWorkspaceDevServer";
 import {
+  bumpLiveWebPreview,
   ensureWebDevServer,
   stopWebDevServer,
   webDevServerSnapshot,
@@ -117,11 +118,13 @@ export async function refreshWorkspacePreview(projectId: string): Promise<void> 
     await ensureWorkspaceRouterSyncFromDisk(projectId, project.masterPrompt);
   }
 
-  // If the live web dev server is up, Metro Fast Refresh picks up the file edits
-  // automatically — no slow re-export needed. Just make sure it's running.
+  // If the live web dev server is up, the edit already landed in the workspace
+  // JSON/.tsx that Metro serves. Bump the edit counter so the iframe reloads the
+  // already-built bundle (near-instant) — no slow re-export needed.
   const live = webDevServerSnapshot(projectId);
   if (live.phase === "ready" && live.publicUrl) {
     ensureWebDevServer(projectId);
+    bumpLiveWebPreview(projectId);
     return;
   }
 

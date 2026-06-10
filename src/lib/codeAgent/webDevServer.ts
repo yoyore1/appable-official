@@ -26,6 +26,8 @@ interface WebDevState {
   port: number | null;
   error?: string;
   startedAt: number;
+  /** Bumped whenever an edit lands — the iframe reloads the (already-built) bundle. */
+  editedAt: number;
 }
 
 type WebDevGlobal = typeof globalThis & {
@@ -41,6 +43,8 @@ export interface WebDevSnapshot {
   /** Same-origin path the iframe should load — safe for remote users. */
   publicUrl: string | null;
   port: number | null;
+  /** Edit counter — when this changes the client reloads the live preview. */
+  editedAt: number;
   error?: string;
 }
 
@@ -57,7 +61,7 @@ export function parseLiveWebProjectId(pathname: string): string | null {
 export function webDevServerSnapshot(projectId: string): WebDevSnapshot {
   const s = g.__appableWebDev;
   if (!s || s.projectId !== projectId) {
-    return { phase: "idle", publicUrl: null, port: null };
+    return { phase: "idle", publicUrl: null, port: null, editedAt: 0 };
   }
   return {
     phase: s.phase,
@@ -66,8 +70,15 @@ export function webDevServerSnapshot(projectId: string): WebDevSnapshot {
         ? liveWebPreviewPath(projectId)
         : null,
     port: s.port,
+    editedAt: s.editedAt,
     error: s.error,
   };
+}
+
+/** Signal that an edit landed — the live preview reloads its built bundle. */
+export function bumpLiveWebPreview(projectId: string): void {
+  const s = g.__appableWebDev;
+  if (s && s.projectId === projectId) s.editedAt = Date.now();
 }
 
 function captureWebPort(state: WebDevState, chunk: Buffer | string): void {
@@ -133,6 +144,7 @@ async function startWebDevServer(projectId: string): Promise<void> {
     phase: "starting",
     port: null,
     startedAt: Date.now(),
+    editedAt: 0,
   };
   g.__appableWebDev = state;
 

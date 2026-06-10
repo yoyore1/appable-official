@@ -148,7 +148,7 @@ export const ExpoWorkspacePreview = forwardRef<
       const raw = (await res.json()) as {
         installing?: boolean;
         web?: Status;
-        liveWeb?: { phase?: string; publicUrl?: string | null };
+        liveWeb?: { phase?: string; publicUrl?: string | null; editedAt?: number };
         health?: { healthy?: boolean };
       };
       const data: Status = raw.web ?? {
@@ -168,10 +168,13 @@ export const ExpoWorkspacePreview = forwardRef<
       }
       setStatus(data);
 
-      // Live Metro (proxied on this host) — stable src so Fast Refresh updates in place.
+      // Live Metro (proxied on this host). The src carries the edit counter so an
+      // edit reloads the already-built bundle (fast) and the change is guaranteed
+      // to show — even if Metro doesn't hot-reload the JSON import in place.
       const live = raw.liveWeb;
       if (live?.phase === "ready" && live.publicUrl) {
-        const src = `${live.publicUrl}/`;
+        const ver = live.editedAt ?? 0;
+        const src = `${live.publicUrl}/?v=${ver}`;
         setLiveUrl(src);
         if (iframeSrc !== src) {
           lastBuiltAt.current = data.builtAt;
