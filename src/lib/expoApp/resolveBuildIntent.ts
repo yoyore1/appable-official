@@ -2,6 +2,7 @@ import type { BrainstormTurn } from "@/lib/types";
 import { isPreviewUiTopic } from "./brainstormGuidance";
 import { enrichBuildUserMessage } from "./buildChatContext";
 import { wantsAuthPreviewWork, wantsMessagingBackendWork } from "./applyMessagingPreview";
+import { listEditableCopyFields } from "./previewCopyFields";
 import type { ExpoAppModel } from "./types";
 import { getStringAtPath, setStringAtPath } from "./tweakPaths";
 
@@ -129,6 +130,26 @@ export function extractCopyChangesFromCoach(
   }
 
   let m: RegExpExecArray | null;
+
+  const replaceQuotedRe = /\breplace\b[\s\S]*?"([^"]+)"\s+with\s+"([^"]+)"/gi;
+  while ((m = replaceQuotedRe.exec(coach))) {
+    const from = m[1]!.trim();
+    const to = m[2]!.trim();
+    const preferHome = /\bhome\b/i.test(coach);
+    const fields = listEditableCopyFields(model, model.profile?.displayName ?? "App");
+    const scoped = preferHome ? fields.filter((f) => f.screen === "home") : fields;
+    const pool = scoped.some((f) => f.value.toLowerCase().includes(from.toLowerCase()))
+      ? scoped
+      : fields;
+    for (const field of pool) {
+      if (!field.value.toLowerCase().includes(from.toLowerCase())) continue;
+      const nextVal = field.value.replace(
+        new RegExp(from.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i"),
+        to
+      );
+      add(field.path, nextVal, field.label);
+    }
+  }
 
   const misleading = coach.match(/["']([^"']+)["']\s+is misleading/i)?.[1];
   const useDirect = coach.match(/\buse\s+["']([^"']+)["']/i)?.[1];

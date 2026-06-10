@@ -1085,7 +1085,8 @@ export async function expoTweakChat(
     result = run.result;
     charge = run.charge;
   } catch (err) {
-    console.error("[expoTweakChat]", err);
+    const detail = err instanceof Error ? err.message : String(err);
+    console.error("[expoTweakChat]", detail, err);
     return {
       ok: false,
       reason: "error",

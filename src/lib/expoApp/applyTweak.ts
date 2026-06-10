@@ -211,12 +211,16 @@ export async function applyExpoTweak(
       options.projectId &&
       JSON.stringify(patchResult.model) !== JSON.stringify(model);
     if (patchesChangedModel) {
-      await syncWorkspaceAfterModelChange(
-        options.projectId!,
-        model,
-        patchResult.model,
-        mp
-      );
+      try {
+        await syncWorkspaceAfterModelChange(
+          options.projectId!,
+          model,
+          patchResult.model,
+          mp
+        );
+      } catch (err) {
+        console.error("[applyExpoTweak] workspace sync failed:", err);
+      }
       try {
         const { refreshWorkspacePreview } = await import("@/lib/codeAgent/workspaceRuntime");
         await refreshWorkspacePreview(options.projectId!);
@@ -265,7 +269,11 @@ export async function applyExpoTweak(
     }
 
     if (modelChanged && options.projectId) {
-      await syncWorkspaceAfterModelChange(options.projectId, model, m, mp);
+      try {
+        await syncWorkspaceAfterModelChange(options.projectId, model, m, mp);
+      } catch (err) {
+        console.error("[applyExpoTweak] workspace sync failed:", err);
+      }
       try {
         const { refreshWorkspacePreview } = await import("@/lib/codeAgent/workspaceRuntime");
         await refreshWorkspacePreview(options.projectId);

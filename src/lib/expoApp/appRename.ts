@@ -23,26 +23,50 @@ export function parseRenamePair(message: string): RenamePair | null {
   const m = message.trim();
   if (!m) return null;
 
+  const quotedReplace = parseQuotedReplacePair(m);
+  if (quotedReplace) return quotedReplace;
+
   const patterns: RegExp[] = [
-    /instead\s+of\s+["']?([^"']+?)["']?\s+make\s+it\s+(?:say\s+)?["']?([^"'.?!]+)["']?/i,
+    /instead\s+of\s+(.+?)\s+make\s+it\s+(?:say\s+)?(.+?)$/i,
     /(?:make it say|say|use|change (?:it )?to)\s+(.+?)\s+instead\s+of\s+(.+?)$/i,
-    /rename\s+(?:the\s+)?(?:app\s+)?(?:to\s+)?["']?([^"']+?)["']?\s+to\s+["']?([^"'.?!]+)["']?/i,
-    /rename\s+(?:it\s+)?to\s+["']?([^"'.?!]+)["']?/i,
-    /replace\s+["']?([^"']+?)["']?\s+with\s+["']?([^"'.?!]+)["']?/i,
+    /rename\s+(?:the\s+)?(?:app\s+)?(?:to\s+)?(.+?)\s+to\s+(.+?)$/i,
+    /rename\s+(?:it\s+)?to\s+(.+?)$/i,
   ];
 
   for (const re of patterns) {
     const hit = m.match(re);
     if (!hit?.[1]) continue;
     if (re.source.includes("rename") && hit[2] === undefined) {
-      return { from: "", to: titleCaseWord(stripSayPrefix(hit[1]!)) };
+      return { from: "", to: titleCaseWord(stripSayPrefix(stripQuotes(hit[1]!))) };
     }
-    const from = stripSayPrefix(hit[1]!.trim()).replace(/[.?!]+$/, "");
-    const to = stripSayPrefix(hit[2]!.trim()).replace(/[.?!]+$/, "");
+    const from = stripSayPrefix(stripQuotes(hit[1]!.trim())).replace(/[.?!]+$/, "");
+    const to = stripSayPrefix(stripQuotes(hit[2]!.trim())).replace(/[.?!]+$/, "");
     if (from && to) return { from, to };
   }
 
   return null;
+}
+
+/** `replace "Old copy" with "New copy"` — handles apostrophes inside double quotes. */
+function parseQuotedReplacePair(message: string): RenamePair | null {
+  if (!/\breplace\b/i.test(message)) return null;
+  const quotes = extractDoubleQuotedStrings(message);
+  if (quotes.length >= 2) {
+    return { from: quotes[0]!, to: quotes[1]! };
+  }
+  return null;
+}
+
+function extractDoubleQuotedStrings(message: string): string[] {
+  const out: string[] = [];
+  const re = /"([^"]+)"/g;
+  let hit: RegExpExecArray | null;
+  while ((hit = re.exec(message))) out.push(hit[1]!.trim());
+  return out;
+}
+
+function stripQuotes(s: string): string {
+  return s.replace(/^["']|["']$/g, "").trim();
 }
 
 /** Drop a leading "say"/"it say" so "make it say X" yields the target text X. */
