@@ -1,4 +1,6 @@
 import type { BrainstormTurn } from "@/lib/types";
+import { isPreviewUiTopic } from "./brainstormGuidance";
+import { enrichBuildUserMessage } from "./buildChatContext";
 import { wantsAuthPreviewWork, wantsMessagingBackendWork } from "./applyMessagingPreview";
 import type { ExpoAppModel } from "./types";
 import { getStringAtPath, setStringAtPath } from "./tweakPaths";
@@ -11,8 +13,8 @@ export function isBackendBuildRequest(message: string): boolean {
 const SHORT_FOLLOWUP_RE =
   /^(yes|yeah|yep|yup|sure|ok|okay|do it|go ahead|proceed|please|let'?s do it|let'?s go|sounds good)([,.]?\s*(do it|please|go ahead))?\.?!?$/i;
 
-/** User switched to Build and wants the last brainstorm plan applied. */
-const BUILD_COMMAND_RE =
+/** User switched to Build / Brainstorm and wants the last plan applied. */
+export const BUILD_COMMAND_RE =
   /^(build|apply|apply it|update|update it|make the change|do the update|go)\.?!?$/i;
 
 const READY_TO_BUILD_RE =
@@ -324,7 +326,11 @@ export function isVagueBuildFollowUp(message: string): boolean {
 }
 
 function expandFromLastBrainstormCopy(history: BrainstormTurn[]): string | null {
-  return buildCopyUpdateFromCoach(lastAssistantMessage(history));
+  const lastCoach = lastAssistantMessage(history);
+  const lastUser =
+    [...history].reverse().find((t) => t.role === "user")?.content ?? "";
+  if (isPreviewUiTopic(lastUser, lastCoach)) return null;
+  return buildCopyUpdateFromCoach(lastCoach);
 }
 
 export function inferBuildTaskFromContext(
@@ -403,6 +409,7 @@ export function buildCopyUpdateFromCoach(
   model?: ExpoAppModel | null
 ): string | null {
   if (!COPY_DISCUSSION_RE.test(lastCoach)) return null;
+  if (isPreviewUiTopic("", lastCoach)) return null;
 
   const changes = extractCopyChangesFromCoach(
     lastCoach,
@@ -412,10 +419,7 @@ export function buildCopyUpdateFromCoach(
     return formatCopyChangesAsBuildPrompt(changes);
   }
 
-  return (
-    "Update the role picker and onboarding copy in the preview exactly as described " +
-    "in the last brainstorm reply."
-  );
+  return null;
 }
 
 /** Apply brainstorm coach copy to the live preview (deterministic — no LLM). */
@@ -562,11 +566,29 @@ function taskToBuildMessage(task: InferredBuildTask): string | null {
 export function expandBuildMessageFromContext(
   message: string,
   history: BrainstormTurn[] = [],
-  context?: string
+  context?: string,
+  pendingPrompt?: string | null,
+  buildHistory: BrainstormTurn[] = []
 ): string {
   const trimmed = message.trim();
 
+  if (
+    (BUILD_COMMAND_RE.test(trimmed) || SHORT_FOLLOWUP_RE.test(trimmed)) &&
+    pendingPrompt?.trim()
+  ) {
+    return pendingPrompt.trim();
+  }
+
+  if (isVagueBuildFollowUp(trimmed) && buildHistory.length >= 2) {
+    const enriched = enrichBuildUserMessage(trimmed, buildHistory);
+    if (enriched !== trimmed) return enriched;
+  }
+
   if (BUILD_COMMAND_RE.test(trimmed) || SHORT_FOLLOWUP_RE.test(trimmed)) {
+    if (buildHistory.length >= 2) {
+      const enriched = enrichBuildUserMessage(trimmed, buildHistory);
+      if (enriched !== trimmed) return enriched;
+    }
     const copyPrompt = expandFromLastBrainstormCopy(history);
     if (copyPrompt) return copyPrompt;
   }

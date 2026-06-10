@@ -1,4 +1,3 @@
-import { chatReply } from "@/lib/models";
 import type { MasterBuildPrompt } from "@/lib/types";
 import {
   buildConnectorRouting,
@@ -11,23 +10,22 @@ import {
   wireMessagingInPreview,
 } from "./applyMessagingPreview";
 import { wireSupabaseAuthInPreview } from "./applySupabasePreview";
-import { buildAgentBuiltStateBlock } from "./builtState";
 import {
   applyBuildPatches,
   compileBuildHandoff,
   type CompiledBuildHandoff,
 } from "./compileBuildHandoff";
 import {
-  buildCopyUpdateFromCoach,
   expandBuildMessageFromContext,
   inferBuildTaskFromContext,
   isBuildExecutionMessage,
   shouldApplyBrainstormPatches,
-  tryApplyCopyFromBrainstorm,
-  tryApplyRoleCopyFromMessage,
 } from "./resolveBuildIntent";
-import { runKimiBuildAgent, tryAuthDebugBuild } from "./buildAgent";
-import { trySmartBuildCopy } from "./smartBuildCopy";
+import { runProjectCodeAgent, shouldUseCodeAgent } from "@/lib/codeAgent";
+import { syncWorkspaceAfterModelChange } from "@/lib/codeAgent/syncAfterBuild";
+import { tryAuthDebugBuild, tryDeterministicBuildOps } from "./buildAgent";
+import { tryBrainstormCoachCopy, trySmartBuildCopy } from "./smartBuildCopy";
+import type { PreviewBuildState } from "./previewBuildState";
 import type { BrainstormBuildSuggestion, BuildPatchOp } from "@/lib/types";
 import { withLegalSettings } from "./smartInteractions";
 import type { BrainstormTurn, InterviewTurn } from "@/lib/types";
@@ -37,12 +35,15 @@ import {
   runCapabilityReview,
   type CapabilityId,
 } from "./capabilities";
+import {
+  applyAppRename,
+  isRenameRequest,
+  parseRenamePair,
+  renameWasApplied,
+} from "./appRename";
+import { buildAppliedChatReply, BUILD_FAILED_REPLY } from "./buildReply";
+import { formatNormieApplyReply } from "./brainstormNormie";
 import type { ExpoAppModel } from "./types";
-import { founderVoiceBlock } from "./founderVoice";
-
-const THINKING =
-  /user says|the user|i need to|first,|let me|might be|could be|console error|dev tools/i;
-
 function finishTweak(
   model: ExpoAppModel,
   mp: MasterBuildPrompt,
@@ -83,6 +84,7 @@ export interface ApplyExpoTweakOptions {
   brainstormContext?: string;
   brainstormSummary?: string;
   brainstormHistory?: BrainstormTurn[];
+  buildHistory?: BrainstormTurn[];
   /** Pre-compiled handoff from brainstorm → Build. */
   compiledHandoff?: CompiledBuildHandoff;
   buildPatches?: BuildPatchOp[];
@@ -96,22 +98,16 @@ export interface ApplyExpoTweakOptions {
   marketplaceSelections?: ConnectorId[];
   /** Server-only: apply Supabase messaging DDL when connected. */
   applyMessagingSchema?: (projectId: string) => Promise<{ ok: true } | { ok: false; message: string }>;
+  /** Which preview screen the founder is on when they sent Build. */
+  previewState?: PreviewBuildState;
+  userId?: string;
+  githubRepoUrl?: string | null;
+  /** Brainstorm Apply — same Build engine, normie-shaped reply. */
+  fromBrainstormApply?: boolean;
 }
 
 function isBackendishRequest(message: string): boolean {
   return wantsMessagingBackendWork(message) || wantsAuthPreviewWork(message);
-}
-
-function cleanReply(text: string, message: string): string {
-  const backend = isBackendishRequest(message);
-  const t = text.trim();
-  if (!t || THINKING.test(t)) {
-    return backend
-      ? "I couldn't apply that yet — connect Supabase in Connections if you need live tables, then ask Build again with specifics."
-      : "I couldn't change the preview from that — try rephrasing (e.g. “wire messaging” or “shorten the home headline”).";
-  }
-  const first = t.split(/\n+/).find((line) => line.trim() && !THINKING.test(line)) ?? t;
-  return first.slice(0, 280);
 }
 
 export { isBackendBuildRequest } from "./resolveBuildIntent";
@@ -185,6 +181,7 @@ export async function applyExpoTweak(
 ): Promise<{ model: ExpoAppModel; reply: string }> {
   const brainstormContext = options.brainstormContext;
   const brainstormHistory = options.brainstormHistory ?? [];
+  const buildHistory = options.buildHistory ?? [];
   const interview = options.interview ?? [];
   const userMessage = message.trim();
   const compiled =
@@ -196,9 +193,12 @@ export async function applyExpoTweak(
       userMessage,
       pendingBuild: options.pendingBuild,
       brainstormContext,
+      buildHistory,
     });
 
-  const fromBrainstorm = shouldApplyBrainstormPatches(userMessage, options.buildPatches);
+  const fromBrainstorm =
+    Boolean(options.fromBrainstormApply) ||
+    shouldApplyBrainstormPatches(userMessage, options.buildPatches);
   const patchesToApply = options.buildPatches?.length
     ? options.buildPatches
     : compiled.patches.length && fromBrainstorm
@@ -207,6 +207,23 @@ export async function applyExpoTweak(
 
   const patchResult = applyBuildPatches(model, patchesToApply);
   if (patchResult) {
+    const patchesChangedModel =
+      options.projectId &&
+      JSON.stringify(patchResult.model) !== JSON.stringify(model);
+    if (patchesChangedModel) {
+      await syncWorkspaceAfterModelChange(
+        options.projectId!,
+        model,
+        patchResult.model,
+        mp
+      );
+      try {
+        const { refreshWorkspacePreview } = await import("@/lib/codeAgent/workspaceRuntime");
+        await refreshWorkspacePreview(options.projectId!);
+      } catch {
+        /* best-effort */
+      }
+    }
     return finishTweak(
       patchResult.model,
       mp,
@@ -219,21 +236,59 @@ export async function applyExpoTweak(
   }
 
   const effectiveMessage =
-    fromBrainstorm && compiled.intent !== "generic" && compiled.applyPrompt
+    fromBrainstorm && compiled.applyPrompt?.trim()
       ? compiled.applyPrompt
-      : expandBuildMessageFromContext(userMessage, brainstormHistory, brainstormContext);
-  const wrap = (m: ExpoAppModel, reply: string) =>
-    finishTweak(
+      : expandBuildMessageFromContext(
+          userMessage,
+          brainstormHistory,
+          brainstormContext,
+          options.pendingBuild?.prompt,
+          buildHistory
+        );
+  const renamePair = parseRenamePair(effectiveMessage);
+
+  const wrap = async (m: ExpoAppModel, reply: string) => {
+    const modelChanged = JSON.stringify(m) !== JSON.stringify(model);
+    const renameOk =
+      !renamePair || !modelChanged || renameWasApplied(model, m, renamePair, mp.appName);
+
+    if (renamePair && modelChanged && !renameOk) {
+      return finishTweak(
+        model,
+        mp,
+        interview,
+        BUILD_FAILED_REPLY,
+        effectiveMessage,
+        brainstormHistory,
+        brainstormContext
+      );
+    }
+
+    if (modelChanged && options.projectId) {
+      await syncWorkspaceAfterModelChange(options.projectId, model, m, mp);
+      try {
+        const { refreshWorkspacePreview } = await import("@/lib/codeAgent/workspaceRuntime");
+        await refreshWorkspacePreview(options.projectId);
+      } catch {
+        /* preview refresh is best-effort — change is already saved */
+      }
+    }
+    const outReply =
+      modelChanged && renameOk
+        ? buildAppliedChatReply()
+        : options.fromBrainstormApply
+          ? formatNormieApplyReply(reply, false)
+          : reply;
+    return finishTweak(
       m,
       mp,
       interview,
-      reply,
+      outReply,
       effectiveMessage,
       brainstormHistory,
       brainstormContext
     );
-  const builtStateNote = buildAgentBuiltStateBlock(model);
-
+  };
   const connectorState: ProjectConnectorState =
     options.connectorState ??
     ({
@@ -255,13 +310,10 @@ export async function applyExpoTweak(
     connectorSuggestions,
     marketplaceSelections
   );
-  if (routing.connectorReply) {
-    return wrap(model, routing.connectorReply);
-  }
 
   if (wantsMessagingBackendWork(effectiveMessage)) {
     if (/read receipt/.test(effectiveMessage.toLowerCase())) {
-      return wrap(
+      return await wrap(
         model,
         "Skipping read receipts for v1 — they add pressure and extra schema. " +
           "Build wired simple chat (sender_id + text) instead. Say “wire messaging” if you want the Messages tab + tables."
@@ -269,7 +321,7 @@ export async function applyExpoTweak(
     }
 
     if (!supabaseConnected) {
-      return wrap(
+      return await wrap(
         model,
         "Messaging needs Supabase — open **Connections → Connect Supabase**, then ask Build to “wire messaging” (preview UI + conversations/messages tables)."
       );
@@ -287,18 +339,18 @@ export async function applyExpoTweak(
       }
     }
 
-    return wrap(wired.model, reply);
+    return await wrap(wired.model, reply);
   }
 
   if (wantsAuthPreviewWork(effectiveMessage) || routing.supabaseWire) {
     if (!supabaseConnected) {
-      return wrap(
+      return await wrap(
         model,
         "I can add sign-up and sign-in to the preview once Supabase is linked — open **Connections → Connect Supabase** on the right, then tell me again."
       );
     }
     const auth = wireSupabaseAuthInPreview(model, mp);
-    return wrap(auth.model, auth.reply);
+    return await wrap(auth.model, auth.reply);
   }
 
   if (
@@ -306,208 +358,148 @@ export async function applyExpoTweak(
     !wantsMessagingBackendWork(effectiveMessage)
   ) {
     const next = withLegalSettings(model);
-    return wrap(
+    return await wrap(
       next,
       "Done — Profile settings now include Sign out and Delete account."
     );
   }
 
   const ruled = tryRules(model, effectiveMessage);
-  if (ruled) return wrap(ruled.model, ruled.reply);
+  if (ruled) return await wrap(ruled.model, ruled.reply);
 
   const authDebug = tryAuthDebugBuild(model, mp, userMessage, connectorState);
   if (authDebug) {
     if ("model" in authDebug) {
-      return wrap(authDebug.model, authDebug.reply);
+      return await wrap(authDebug.model, authDebug.reply);
     }
-    return wrap(model, authDebug.reply);
+    return await wrap(model, authDebug.reply);
+  }
+
+  const structural = tryDeterministicBuildOps(model, effectiveMessage, options.previewState);
+  if (structural?.kind === "applied") {
+    return await wrap(structural.model, structural.reply);
+  }
+
+  if (renamePair) {
+    const renamed = applyAppRename(model, renamePair, mp.appName);
+    if (renamed) {
+      return await wrap(renamed, "Done.");
+    }
+  }
+
+  if (fromBrainstorm) {
+    const coachCopy = tryBrainstormCoachCopy(model, effectiveMessage, brainstormHistory);
+    if (coachCopy?.kind === "applied") {
+      return await wrap(coachCopy.model, coachCopy.reply);
+    }
   }
 
   const smartCopy = await trySmartBuildCopy(
     model,
     mp,
-    userMessage,
+    effectiveMessage,
     interview,
-    brainstormHistory
+    brainstormHistory,
+    options.previewState
   );
   if (smartCopy?.kind === "applied") {
-    return wrap(smartCopy.model, smartCopy.reply);
+    return await wrap(smartCopy.model, smartCopy.reply);
   }
   if (smartCopy?.kind === "clarify") {
-    return wrap(model, smartCopy.reply);
+    return await wrap(model, smartCopy.reply);
   }
 
-  const brainstormCopy =
-    fromBrainstorm
-      ? tryApplyCopyFromBrainstorm(model, effectiveMessage, brainstormHistory)
-      : null;
-  if (brainstormCopy) return wrap(brainstormCopy.model, brainstormCopy.reply);
-
-  const roleCopy = fromBrainstorm
-    ? tryApplyRoleCopyFromMessage(model, effectiveMessage, brainstormHistory)
-    : null;
-  if (roleCopy) return wrap(roleCopy.model, roleCopy.reply);
-
-  const contextBlock = [
-    builtStateNote,
-    brainstormContext?.trim()
-      ? `Brainstorm context (user may reference "what we discussed"):\n${brainstormContext.trim()}`
-      : "",
-  ]
-    .filter(Boolean)
-    .join("\n\n");
-
-  const userPrompt =
-    effectiveMessage !== userMessage
-      ? `User said: "${userMessage}" (means: ${effectiveMessage})`
-      : `User request: ${userMessage}`;
-
-  if (!fromBrainstorm) {
-    const kimiFallback = await runKimiBuildAgent(model, mp, userMessage, {
-      brainstormContext,
-      brainstormHistory,
-      brainstormSummary: options.brainstormSummary,
-      connectorState,
-      connectorNote: brainstormContext,
-      interview,
-    });
-    if (kimiFallback?.kind === "applied") {
-      return wrap(kimiFallback.model, kimiFallback.reply);
-    }
-    if (kimiFallback?.kind === "clarify") {
-      return wrap(model, kimiFallback.reply);
-    }
-  }
-
-  const llm = await chatReply(
-    `You are the BUILD agent for ${mp.appName}. The user is the founder/dev building this app — implement the product they own, not end-user business flows. ` +
-      `${founderVoiceBlock(mp.appName)} ` +
-      `You change the live preview AND wire backend when Supabase is connected. ` +
-      `You can: UI copy/colors/tabs, sign-up + sign-in/auth, messaging tables + Messages tab, profile settings. ` +
-      `Follow INTEGRATION IMPLEMENTATION PLAYBOOKS in Connections context — wire SDK config for integrations on the project plan (never invent keys). ` +
-      `NEVER remove existing tabs when adding features — append a tab or reuse Alerts/Notifications. ` +
-      `Use recent brainstorm context when the user says yes/ready/proceed — execute what you were just planning. ` +
-      `Reply with ONE short sentence (max 35 words) confirming what you did.` +
-      (contextBlock ? `\n\n${contextBlock}` : ""),
-    `Current headline: "${model.home.headline}". ${userPrompt}`,
-    120
-  );
-
-  if (llm && /headline|title|home/.test(effectiveMessage.toLowerCase())) {
-    const quoted = llm.match(/"([^"]+)"/)?.[1];
-    if (quoted) {
-      return wrap(
-        { ...model, home: { ...model.home, headline: quoted } },
-        cleanReply(`Home headline → "${quoted}"`, effectiveMessage)
-      );
-    }
-  }
-
-  const reply = cleanReply(llm, effectiveMessage);
-  const soundsGeneric =
-    /save is on every card|open any card|tap around|try tapping|collection button|only do visual|shorten the home headline|didn't change the preview/i.test(
-      reply
-    );
-  if (soundsGeneric) {
-    const smartRetry = await trySmartBuildCopy(model, mp, userMessage, interview);
-    if (smartRetry?.kind === "applied") {
-      return wrap(smartRetry.model, smartRetry.reply);
-    }
-    if (smartRetry?.kind === "clarify") {
-      return wrap(model, smartRetry.reply);
-    }
-
-    if (fromBrainstorm) {
-      const roleCopyFallback = tryApplyCopyFromBrainstorm(
-        model,
-        effectiveMessage,
-        brainstormHistory
-      );
-      if (roleCopyFallback) return wrap(roleCopyFallback.model, roleCopyFallback.reply);
-
-      const lastCoach = [...brainstormHistory]
-        .reverse()
-        .find((t) => t.role === "assistant")?.content;
-      const pendingCopy = lastCoach ? buildCopyUpdateFromCoach(lastCoach, model) : null;
-      if (pendingCopy) {
-        const applied = tryApplyCopyFromBrainstorm(model, pendingCopy, brainstormHistory);
-        if (applied) return wrap(applied.model, applied.reply);
-      }
-    }
-
-    const task = inferBuildTaskFromContext(brainstormHistory);
-
-    if (task === "messaging" && pendingCopy) {
-      return wrap(
-        model,
-        "That brainstorm was about copy on the role picker — not messaging. " +
-          "Try Build again with: update the role descriptions we discussed."
-      );
-    }
-
-    if (task === "messaging") {
-      if (!supabaseConnected) {
-        return wrap(
-          model,
-          "Messaging needs Supabase — connect it in Connections, then ask Build to “wire messaging”."
-        );
-      }
-      const wired = wireMessagingInPreview(model, mp);
-      let finalReply = wired.reply;
-      if (options.projectId && options.applyMessagingSchema) {
-        const schema = await options.applyMessagingSchema(options.projectId);
-        if (schema.ok) {
-          finalReply += " Created appable_conversations + appable_messages in Supabase.";
-        } else {
-          finalReply += ` ${schema.message}`;
-        }
-      }
-      return wrap(wired.model, finalReply);
-    }
-
-    if (task === "auth" && supabaseConnected) {
-      const auth = wireSupabaseAuthInPreview(model, mp);
-      return wrap(auth.model, auth.reply);
-    }
-
-    if (task === "auth" && !supabaseConnected) {
-      return wrap(
-        model,
-        "Connect Supabase in Connections first, then ask Build to wire sign-up and sign-in."
-      );
-    }
-
-    if (task === "sign_out") {
-      return wrap(
-        withLegalSettings(model),
-        "Done — Profile settings now include Sign out and Delete account."
-      );
-    }
-
-    if (fromBrainstorm) {
-      const retryCompiled = compileBuildHandoff({
-        history: brainstormHistory,
-        model,
-        appName: mp.appName,
-        userMessage,
-        brainstormContext,
-      });
-      const retryPatches = applyBuildPatches(model, retryCompiled.patches);
-      if (retryPatches) {
-        return wrap(retryPatches.model, retryPatches.reply);
-      }
-
-      const retryCopy = tryApplyCopyFromBrainstorm(model, effectiveMessage, brainstormHistory);
-      if (retryCopy) return wrap(retryCopy.model, retryCopy.reply);
-    }
-
-    return wrap(
+  if (
+    options.projectId &&
+    (isRenameRequest(effectiveMessage) ||
+      shouldUseCodeAgent(effectiveMessage, {
+        fromBrainstormApply: options.fromBrainstormApply,
+        projectId: options.projectId,
+      }))
+  ) {
+    const code = await runProjectCodeAgent({
+      projectId: options.projectId,
       model,
-      isBackendishRequest(effectiveMessage)
-        ? "Try: “wire messaging” or “add sign-up and sign-in with Supabase” — Build handles backend and UI."
-        : "I'm not sure which screen or line you mean — quote the text or say the screen (welcome, role picker, home, sign-in)."
+      mp,
+      message: effectiveMessage,
+      previewState: options.previewState,
+      buildHistory,
+      brainstormHistory,
+      brainstormContext,
+      interview,
+      githubRepoUrl: options.githubRepoUrl,
+      userId: options.userId,
+      appName: mp.appName,
+    });
+    if (code?.kind === "applied") {
+      return await wrap(code.model, code.reply);
+    }
+    if (code?.kind === "clarify") {
+      return await wrap(model, code.reply);
+    }
+    if (!code) {
+      return await wrap(
+        model,
+        "Build workspace agent isn't available — check server config (FIREWORKS_API_KEY, CODE_AGENT)."
+      );
+    }
+  } else if (
+    shouldUseCodeAgent(effectiveMessage, {
+      fromBrainstormApply: options.fromBrainstormApply,
+      projectId: options.projectId,
+    })
+  ) {
+    return await wrap(
+      model,
+      "Build needs a project workspace to edit files — refresh and try again."
     );
   }
 
-  return wrap(model, reply);
+  const task = inferBuildTaskFromContext(brainstormHistory);
+
+  if (task === "messaging") {
+    if (!supabaseConnected) {
+      return await wrap(
+        model,
+        "Messaging needs Supabase — connect it in Connections, then ask Build to “wire messaging”."
+      );
+    }
+    const wired = wireMessagingInPreview(model, mp);
+    let finalReply = wired.reply;
+    if (options.projectId && options.applyMessagingSchema) {
+      const schema = await options.applyMessagingSchema(options.projectId);
+      if (schema.ok) {
+        finalReply += " Created appable_conversations + appable_messages in Supabase.";
+      } else {
+        finalReply += ` ${schema.message}`;
+      }
+    }
+    return await wrap(wired.model, finalReply);
+  }
+
+  if (task === "auth" && supabaseConnected) {
+    const auth = wireSupabaseAuthInPreview(model, mp);
+    return await wrap(auth.model, auth.reply);
+  }
+
+  if (task === "auth" && !supabaseConnected) {
+    return await wrap(
+      model,
+      "Connect Supabase in Connections first, then ask Build to wire sign-up and sign-in."
+    );
+  }
+
+  if (task === "sign_out") {
+    return await wrap(
+      withLegalSettings(model),
+      "Done — Profile settings now include Sign out and Delete account."
+    );
+  }
+
+  return await wrap(
+    model,
+    isBackendishRequest(effectiveMessage)
+      ? "Try: “wire messaging” or “add sign-up and sign-in with Supabase” — Build handles backend and UI."
+      : "I couldn't apply that yet — try again with a specific change, e.g. “remove the Cart tab” or “add Open/Matched/Done chips on Home walk cards.”"
+  );
 }

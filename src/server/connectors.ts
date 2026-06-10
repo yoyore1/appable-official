@@ -339,39 +339,50 @@ export async function getConnectorWebhookSecrets(projectId: string): Promise<
 
   const rc = access.project.revenueCatConnector;
   if (rc?.public.status === "connected") {
-    const { decryptRevenueCatSecrets } = await import(
-      "@/lib/connectors/revenueCatConnector"
-    );
-    const secrets = decryptRevenueCatSecrets(rc);
-    out.revenueCat = {
-      webhookUrl: rc.public.webhookUrl,
-      authorization: `Bearer ${secrets.webhookSecret}`,
-    };
+    try {
+      const { decryptRevenueCatSecrets } = await import(
+        "@/lib/connectors/revenueCatConnector"
+      );
+      const secrets = decryptRevenueCatSecrets(rc);
+      out.revenueCat = {
+        webhookUrl: rc.public.webhookUrl,
+        authorization: `Bearer ${secrets.webhookSecret}`,
+      };
+    } catch {
+      /* stale encryption — reconnect RevenueCat in Integrations */
+    }
   }
 
   let sb = access.project.supabaseConnector;
   if (sb?.public.status === "connected") {
-    if (!sb.webhookSecretEnc || !sb.public.webhookUrl) {
-      const { encryptConnectorSecret } = await import("@/lib/connectors/encrypt");
-      const { mintWebhookSecret, supabaseWebhookUrl } = await import(
-        "@/lib/connectors/webhookUrls"
-      );
-      const patched = {
+    const { encryptConnectorSecret, tryDecryptConnectorSecret } = await import(
+      "@/lib/connectors/encrypt"
+    );
+    const { mintWebhookSecret, supabaseWebhookUrl } = await import(
+      "@/lib/connectors/webhookUrls"
+    );
+
+    const webhookUrl = sb.public.webhookUrl ?? supabaseWebhookUrl(projectId);
+    let webhookSecret = sb.webhookSecretEnc
+      ? tryDecryptConnectorSecret(sb.webhookSecretEnc)
+      : null;
+
+    if (!webhookSecret) {
+      webhookSecret = mintWebhookSecret();
+      sb = {
         ...sb,
-        public: {
-          ...sb.public,
-          webhookUrl: sb.public.webhookUrl ?? supabaseWebhookUrl(projectId),
-        },
-        webhookSecretEnc:
-          sb.webhookSecretEnc ?? encryptConnectorSecret(mintWebhookSecret()),
+        public: { ...sb.public, webhookUrl },
+        webhookSecretEnc: encryptConnectorSecret(webhookSecret),
       };
-      await db.updateProject(projectId, { supabaseConnector: patched });
-      sb = patched;
+      await db.updateProject(projectId, { supabaseConnector: sb });
+    } else if (!sb.public.webhookUrl) {
+      sb = { ...sb, public: { ...sb.public, webhookUrl } };
+      await db.updateProject(projectId, { supabaseConnector: sb });
     }
-    const { decryptConnectorSecret } = await import("@/lib/connectors/encrypt");
+
     out.supabase = {
-      webhookUrl: sb.public.webhookUrl ?? "",
-      secret: decryptConnectorSecret(sb.webhookSecretEnc!),
+      webhookUrl,
+      secret: webhookSecret,
     };
   }
 

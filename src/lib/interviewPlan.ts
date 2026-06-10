@@ -16,7 +16,6 @@ const SPINE_STEPS: Record<"audience" | "features" | "name" | "colors", Interview
     options: [],
   },
 };
-import { hasDetailedFlow } from "@/lib/dynamicInterview";
 import {
   isPoolStepId,
   resolvePoolStep,
@@ -42,23 +41,13 @@ const FEATURE_IDS = new Set([
   "followup_clarify_features",
 ]);
 
-function ideaCoversFeatures(idea: string): boolean {
-  const l = idea.toLowerCase();
-  return (
-    hasDetailedFlow(idea) ||
-    /alarm|photo|snooze|track|save|share|post|book|match|chat|streak|list|browse|verify|camera/.test(
-      l
-    )
-  );
-}
-
 export function hasAudienceAnswer(interview: InterviewTurn[]): boolean {
   if (mentionsAudienceInIdea(answerFor(interview, "idea"))) return true;
   return [...AUDIENCE_IDS].some((id) => answerFor(interview, id).trim().length > 2);
 }
 
 export function hasFeaturesAnswer(interview: InterviewTurn[]): boolean {
-  if (ideaCoversFeatures(answerFor(interview, "idea"))) return true;
+  // Only explicit answers count — keywords in the idea (track, streak, etc.) are not enough.
   return [...FEATURE_IDS].some((id) => answerFor(interview, id).trim().length > 2);
 }
 

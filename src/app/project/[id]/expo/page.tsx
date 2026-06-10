@@ -57,6 +57,7 @@ export default async function ExpoBuildPage({
         interview={project.interview}
         initialReadinessState={project.readinessState}
         initialBrainstormState={project.brainstormState}
+        initialBuildState={project.buildState}
         initialSupabaseConnector={project.supabaseConnector?.public ?? null}
         initialRevenueCatConnector={project.revenueCatConnector?.public ?? null}
         initialRailwayConnector={project.railwayConnector?.public ?? null}

@@ -1,5 +1,10 @@
 import { isDeferToRecommendation, profileFromMasterPrompt } from "@/lib/designResearch";
 import { mergeFeatureList, parseUserFeatures } from "@/lib/expoApp/featurePlan";
+import {
+  detectSuggestNiche,
+  normalizeSuggestTopic,
+  type SuggestNiche,
+} from "@/lib/suggestTopic";
 import type { MasterBuildPrompt } from "@/lib/types";
 
 /** Proven screen structures the build assembles from (internal — never shown in UX). */
@@ -345,31 +350,52 @@ export function pickDiscoverSlots(variant = 0): PlaybookSlot[] {
   });
 }
 
+const NICHE_ARCHETYPE_TRIPLES: Record<SuggestNiche, LayoutArchetype[]> = {
+  habits: ["habit-streak", "tracker-dashboard", "journal-notes"],
+  fitness: ["tracker-dashboard", "habit-streak", "journal-notes"],
+  pets: ["booking-scheduling", "chat-messaging", "tracker-dashboard"],
+  food: ["content-library", "tracker-dashboard", "journal-notes"],
+  finance: ["tracker-dashboard", "habit-streak", "journal-notes"],
+  booking: ["booking-scheduling", "chat-messaging", "tracker-dashboard"],
+  journal: ["journal-notes", "habit-streak", "tracker-dashboard"],
+  generic: [],
+};
+
 /** Three proven app patterns for a landing-page topic (e.g. gym → tracker + streak + library). */
 export function pickPlaybookSlotsForTopic(topic: string, variant = 0): PlaybookSlot[] {
-  const primary = inferArchetypeFromInterview(topic.trim(), "", "");
-  const baseAlts = ARCHETYPE_ALTERNATES[primary.archetype] ?? [
-    "habit-streak",
-    "content-library",
-  ];
-  const shift = ((variant % baseAlts.length) + baseAlts.length) % baseAlts.length;
-  const alts = [...baseAlts.slice(shift), ...baseAlts.slice(0, shift)];
-  const ids: LayoutArchetype[] = [primary.archetype];
-  if (variant > 0 && alts[0]) {
-    ids[0] = alts[0]!;
+  const normalized = normalizeSuggestTopic(topic);
+  const niche = detectSuggestNiche(normalized);
+  const primary = inferArchetypeFromInterview(normalized, "", "");
+
+  let ids: LayoutArchetype[] = NICHE_ARCHETYPE_TRIPLES[niche].length
+    ? [...NICHE_ARCHETYPE_TRIPLES[niche]]
+    : [primary.archetype];
+
+  if (ids.length === 0 || niche === "generic") {
+    const baseAlts = ARCHETYPE_ALTERNATES[primary.archetype] ?? [
+      "habit-streak",
+      "journal-notes",
+    ];
+    const shift = ((variant % baseAlts.length) + baseAlts.length) % baseAlts.length;
+    const alts = [...baseAlts.slice(shift), ...baseAlts.slice(0, shift)];
+    ids = [primary.archetype];
+    if (variant > 0 && alts[0]) ids[0] = alts[0]!;
+    for (const alt of alts) {
+      if (!ids.includes(alt)) ids.push(alt);
+      if (ids.length >= 3) break;
+    }
+  } else if (variant > 0) {
+    const rotated = [...ids.slice(variant % ids.length), ...ids.slice(0, variant % ids.length)];
+    ids = rotated;
   }
-  for (const alt of alts) {
-    if (!ids.includes(alt)) ids.push(alt);
-    if (ids.length >= 3) break;
-  }
+
   for (const id of Object.keys(LAYOUT_ARCHETYPES) as LayoutArchetype[]) {
     if (ids.length >= 3) break;
     if (!ids.includes(id)) ids.push(id);
   }
 
-  const topicAngle = topic.trim();
   return ids.slice(0, 3).map((id, index) =>
-    slotFromArchetype(id, index, topicAngle || undefined)
+    slotFromArchetype(id, index, normalized || undefined)
   );
 }
 

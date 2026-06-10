@@ -4,11 +4,11 @@
   "private": true,
   "description": "Appable web platform (getappable.com) — build your first app free.",
   "scripts": {
-    "dev": "next dev -H 0.0.0.0",
+    "dev": "tsx server.ts",
     "expo:install": "cd expo-shell && npm install",
     "expo:dev": "node scripts/start-expo-dev.mjs",
     "build": "next build",
-    "start": "next start",
+    "start": "tsx server.ts",
     "lint": "next lint",
     "typecheck": "tsc --noEmit"
   },
@@ -19,15 +19,18 @@
     "canvas-confetti": "^1.9.3",
     "clsx": "^2.1.1",
     "framer-motion": "^11.11.17",
+    "http-proxy": "^1.18.1",
     "lucide-react": "^0.456.0",
     "next": "^14.2.18",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "stripe": "^17.3.1",
-    "tailwind-merge": "^2.5.4"
+    "tailwind-merge": "^2.5.4",
+    "tsx": "^4.22.4"
   },
   "devDependencies": {
     "@types/canvas-confetti": "^1.6.4",
+    "@types/http-proxy": "^1.17.17",
     "@types/node": "^22.9.0",
     "@types/react": "^18.3.12",
     "@types/react-dom": "^18.3.1",

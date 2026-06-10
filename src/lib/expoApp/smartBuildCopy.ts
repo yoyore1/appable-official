@@ -1,11 +1,17 @@
-import { flashChatComplete } from "@/lib/flashChat";
+import { integrations } from "@/lib/config";
+import { buildChatComplete } from "@/lib/planChat";
+import { isPreviewModelTweakRequest } from "./brainstormGuidance";
 import type { BrainstormTurn, InterviewTurn, MasterBuildPrompt } from "@/lib/types";
-import { parseCoachReplacement } from "./tapCopyHandoff";
+import { extractCopyChangesFromCoach } from "./resolveBuildIntent";
+import { isTapEditMessage, parseCoachReplacement } from "./tapCopyHandoff";
 import { extractPreviewPathFromMessage, resolveTapEditScope } from "./tapEditScope";
 import { indexBuildContext, topCopyTargetFromIndex, verifyBuildChange } from "./buildContext";
 import { appendCoachContext, buildPreviewCoachContext } from "./previewCoachContext";
 import { listEditableCopyFields, type PreviewCopyField } from "./previewCopyFields";
 import type { ExpoAppModel } from "./types";
+import { screenIdsForBuildState, type PreviewBuildState } from "./previewBuildState";
+import { applyAppRename, parseRenamePair } from "./appRename";
+import { BUILD_DONE_REPLY } from "./buildReply";
 import { getStringAtPath, setStringAtPath } from "./tweakPaths";
 
 export type SmartBuildCopyResult =
@@ -49,12 +55,19 @@ function overlapScore(a: string, b: string): number {
   return hit / Math.max(aw.size, bw.length);
 }
 
+/** Double-quoted strings only — single quotes break on contractions (I'm, it's). */
 function quotedPhrases(msg: string): string[] {
   const out: string[] = [];
-  const re = /["']([^"']{4,})["']/g;
+  const re = /"([^"]{4,})"/g;
   let m: RegExpExecArray | null;
   while ((m = re.exec(msg))) out.push(m[1]!.trim());
   return out;
+}
+
+function explicitReplacementInMessage(msg: string): string | null {
+  if (/^Applying from brainstorm:/i.test(msg)) return parseCoachReplacement(msg);
+  if (!/replace it with|replace with:|\buse\s+["']/i.test(msg)) return null;
+  return parseCoachReplacement(msg);
 }
 
 export { listEditableCopyFields } from "./previewCopyFields";
@@ -74,7 +87,12 @@ function screenBoost(msg: string, target: CopyTarget): number {
   return boost;
 }
 
-function rankTargets(msg: string, targets: CopyTarget[]): CopyTarget[] {
+function rankTargets(
+  msg: string,
+  targets: CopyTarget[],
+  previewState?: PreviewBuildState
+): CopyTarget[] {
+  const activeScreens = new Set(screenIdsForBuildState(previewState));
   const nMsg = norm(msg);
   const quotes = quotedPhrases(msg);
 
@@ -95,6 +113,9 @@ function rankTargets(msg: string, targets: CopyTarget[]): CopyTarget[] {
       for (const w of words(target.value)) {
         if (w.length >= 5 && nMsg.includes(w)) score += 0.08;
       }
+
+      if (activeScreens.size && activeScreens.has(target.screen)) score += 0.55;
+      if (previewState?.focusedPath === target.path) score += 0.9;
 
       return { target, score };
     })
@@ -137,22 +158,24 @@ async function rewriteCopy(
     `Task: ${rewriteTask(message)}\n\n` +
     `Write the new line only.`;
 
-  const { text } = await flashChatComplete(
+  if (!integrations.expoBuildModel) return "";
+
+  const { text } = await buildChatComplete(
     [
       { role: "system", content: system },
       { role: "user", content: user },
     ],
-    { temperature: 0.7, maxTokens: 160, timeoutMs: 35_000 }
+    { temperature: 0.7, maxTokens: 256, timeoutMs: 60_000 }
   );
 
   let next = cleanLine(text);
   if (!next || next.toLowerCase() === target.value.toLowerCase()) {
-    const retry = await flashChatComplete(
+    const retry = await buildChatComplete(
       [
         { role: "system", content: system },
         { role: "user", content: `${user}\n\nReply with ONLY the rewritten line.` },
       ],
-      { temperature: 0.65, maxTokens: 180, timeoutMs: 40_000 }
+      { temperature: 0.65, maxTokens: 320, timeoutMs: 75_000 }
     );
     next = cleanLine(retry.text);
   }
@@ -173,25 +196,123 @@ function tapScopeFromBrainstormHistory(
   return null;
 }
 
+function tryInsteadOfReplacement(
+  model: ExpoAppModel,
+  message: string,
+  appName: string
+): SmartBuildCopyResult | null {
+  const pair = parseRenamePair(message);
+  if (!pair) return null;
+  const renamed = applyAppRename(model, pair, appName);
+  if (!renamed) return null;
+  return { kind: "applied", model: renamed, reply: BUILD_DONE_REPLY };
+}
+
+function lastCoachReply(history: BrainstormTurn[]): string {
+  for (let i = history.length - 1; i >= 0; i--) {
+    if (history[i]?.role === "assistant") return history[i]!.content;
+  }
+  return "";
+}
+
+function tryStructuredBrainstormHandoff(
+  message: string,
+  model: ExpoAppModel
+): SmartBuildCopyResult | null {
+  if (!/^Applying from brainstorm:/i.test(message)) return null;
+
+  const path = message.match(/Path:\s*(\S+)/)?.[1];
+  const change = message.match(/Change:\s*"(.+)"\s*→\s*"(.+)"/);
+  if (path && change?.[2]) {
+    const next = change[2].trim();
+    const updated = setStringAtPath(model, path, next);
+    if (getStringAtPath(updated, path) === next) {
+      return {
+        kind: "applied",
+        model: updated,
+        reply: BUILD_DONE_REPLY,
+      };
+    }
+  }
+  return null;
+}
+
+/** Instant apply when brainstorm coach already named exact copy changes. */
+export function tryBrainstormCoachCopy(
+  model: ExpoAppModel,
+  message: string,
+  brainstormHistory: BrainstormTurn[]
+): SmartBuildCopyResult | null {
+  const structured = tryStructuredBrainstormHandoff(message, model);
+  if (structured) return structured;
+
+  const coach = lastCoachReply(brainstormHistory);
+  if (!coach.trim()) return null;
+
+  const changes = extractCopyChangesFromCoach(coach, model);
+  if (changes.length) {
+    let next = model;
+    const labels: string[] = [];
+    for (const c of changes) {
+      const updated = setStringAtPath(next, c.path, c.value);
+      if (getStringAtPath(updated, c.path) === c.value) {
+        next = updated;
+        labels.push(c.desc);
+      }
+    }
+    if (labels.length) {
+      return {
+        kind: "applied",
+        model: next,
+        reply: BUILD_DONE_REPLY,
+      };
+    }
+  }
+
+  const quoted = parseCoachReplacement(coach);
+  if (!quoted) return null;
+
+  const ranked = rankTargets(
+    `${message}\n${coach}`,
+    listEditableCopyFields(model, model.profile?.displayName ?? "App")
+  );
+  const hit = ranked[0];
+  if (!hit) return null;
+
+  const updated = setStringAtPath(model, hit.path, quoted);
+  if (getStringAtPath(updated, hit.path) !== quoted) return null;
+
+  return {
+    kind: "applied",
+    model: updated,
+    reply: BUILD_DONE_REPLY,
+  };
+}
+
 /** Cursor-style: find the line the founder named, rewrite it, apply to preview. */
 export async function trySmartBuildCopy(
   model: ExpoAppModel,
   mp: MasterBuildPrompt,
   message: string,
   interview: InterviewTurn[] = [],
-  brainstormHistory: BrainstormTurn[] = []
+  brainstormHistory: BrainstormTurn[] = [],
+  previewState?: PreviewBuildState
 ): Promise<SmartBuildCopyResult | null> {
   const msg = message.trim();
-  if (!msg || /^Applying from brainstorm:/i.test(msg)) return null;
+  if (!msg) return null;
+  if (isPreviewModelTweakRequest(msg)) return null;
+
+  const insteadOf = tryInsteadOfReplacement(model, msg, mp.appName);
+  if (insteadOf) return insteadOf;
+
+  const coachFast = tryBrainstormCoachCopy(model, msg, brainstormHistory);
+  if (coachFast) return coachFast;
 
   const tapScope =
     resolveTapEditScope(model, mp.appName, msg) ??
     tapScopeFromBrainstormHistory(brainstormHistory, model, mp.appName);
   if (tapScope) {
-    const direct =
-      parseCoachReplacement(msg) ??
-      quotedPhrases(msg).find((q) => q.length >= 4) ??
-      null;
+    const direct = explicitReplacementInMessage(msg);
     if (direct) {
       const next = direct.trim();
       const updated = setStringAtPath(model, tapScope.path, next);
@@ -199,8 +320,22 @@ export async function trySmartBuildCopy(
         return {
           kind: "applied",
           model: updated,
-          reply: `Updated ${tapScope.target.label} → "${next}"`,
+          reply: BUILD_DONE_REPLY,
         };
+      }
+    }
+    if (isTapEditMessage(msg) && COPY_INTENT_RE.test(msg)) {
+      const coach = buildPreviewCoachContext(mp, interview, model);
+      const next = await rewriteCopy(mp, coach, tapScope.target, msg);
+      if (next.trim() && next.trim().toLowerCase() !== tapScope.target.value.toLowerCase()) {
+        const updated = setStringAtPath(model, tapScope.path, next.trim());
+        if (getStringAtPath(updated, tapScope.path) === next.trim()) {
+          return {
+            kind: "applied",
+            model: updated,
+            reply: BUILD_DONE_REPLY,
+          };
+        }
       }
     }
   }
@@ -210,7 +345,8 @@ export async function trySmartBuildCopy(
   const chunks = indexBuildContext({ model, mp, interview });
   const ranked = rankTargets(
     msg,
-    listEditableCopyFields(model, mp.appName)
+    listEditableCopyFields(model, mp.appName),
+    previewState
   );
   const hitFromRank = ranked[0];
   const hitFromIndex = topCopyTargetFromIndex(msg, chunks);
@@ -276,6 +412,6 @@ export async function trySmartBuildCopy(
   return {
     kind: "applied",
     model: updated,
-    reply: `Updated ${target.label} on the ${target.screen} screen → "${next.trim()}"`,
+    reply: BUILD_DONE_REPLY,
   };
 }

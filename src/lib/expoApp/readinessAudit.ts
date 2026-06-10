@@ -8,6 +8,7 @@ import type {
 import { buildInterviewContext } from "./interviewContext";
 import { authBrainstormPillPrompt, authBuildPillPrompt, authChecklistWhy } from "./authGuidance";
 import { modelHasAccountControls, withLegalSettings } from "./smartInteractions";
+import { coerceExpoAppModel } from "./coerceModel";
 import type { ExpoAppModel } from "./types";
 
 export type ReadinessCategory =
@@ -181,6 +182,7 @@ export function auditAppReadiness(
   mp: MasterBuildPrompt,
   interview: InterviewTurn[] = []
 ): AppReadinessAudit {
+  model = coerceExpoAppModel(model);
   const ctx = buildInterviewContext(mp, interview);
   const blob = blobFrom(mp, interview);
   const items: ReadinessItem[] = [];
@@ -665,6 +667,7 @@ export function formatWalkthroughReply(
 
 /** Short model summary for brainstorm. */
 export function summarizeModelForBrainstorm(model: ExpoAppModel): string {
+  model = coerceExpoAppModel(model);
   const tabs = model.tabs.map((t) => t.label).join(", ");
   const onboarding = model.onboarding.length
     ? `${model.onboarding.length} onboarding slides`

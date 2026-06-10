@@ -9,7 +9,6 @@ import {
   Rocket,
   Smartphone,
 } from "lucide-react";
-import { buildExpoGoDeepLink } from "@/lib/expoGoLink";
 import { cn } from "@/lib/utils";
 
 const EXPO_IOS = "https://apps.apple.com/app/expo-go/id982107779";
@@ -103,39 +102,47 @@ export function ExpoPhoneGuide({
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    if (!ready || !previewToken) return;
+    if (!ready) return;
 
     let cancelled = false;
+    const runtimeEndpoint = `/api/projects/${projectId}/runtime`;
 
     async function poll() {
       try {
-        const res = await fetch("/api/expo/status", { cache: "no-store" });
+        const res = await fetch(runtimeEndpoint, { cache: "no-store" });
         const data = (await res.json()) as {
-          status: ExpoStatus;
-          url?: string | null;
-          error?: string;
+          installing?: boolean;
+          web?: { phase?: string };
+          expoGo?: { status: ExpoStatus; url?: string | null; error?: string };
         };
         if (cancelled) return;
-        setStatus(data.status);
-        if (data.error) setError(data.error);
-        if (data.url && previewToken) {
-          setExpoGoUrl(buildExpoGoDeepLink(data.url, projectId, previewToken));
-        }
-        if (data.status !== "ready" && data.status !== "error") {
-          await fetch("/api/expo/start", { method: "POST" });
+        const snap = data.expoGo ?? { status: "idle" as ExpoStatus, url: null };
+        setStatus(snap.status);
+        if (snap.error) setError(snap.error);
+        if (snap.url) setExpoGoUrl(snap.url);
+        if (data.installing) {
+          setStatus("starting");
+          setError(null);
+        } else if (
+          snap.status === "error" ||
+          data.web?.phase === "error"
+        ) {
+          await fetch(runtimeEndpoint, { method: "POST" });
+        } else if (snap.status !== "ready") {
+          await fetch(runtimeEndpoint, { method: "POST" });
         }
       } catch {
         if (!cancelled) setError("Could not reach phone preview service");
       }
     }
 
-    void fetch("/api/expo/start", { method: "POST" }).then(() => poll());
+    void fetch(runtimeEndpoint, { method: "POST" }).then(() => poll());
     const iv = setInterval(poll, 2500);
     return () => {
       cancelled = true;
       clearInterval(iv);
     };
-  }, [ready, previewToken, projectId]);
+  }, [ready, projectId]);
 
   const qrSize = compact || embedded ? 188 : 220;
   const qrSrc =
@@ -219,10 +226,12 @@ export function ExpoPhoneGuide({
                     <Loader2 className="h-5 w-5 animate-spin" />
                   </span>
                   <p className="mt-3 text-[11px] font-semibold text-charcoal">
-                    Getting your phone preview ready…
+                    {status === "starting"
+                      ? "Installing dependencies and starting Metro…"
+                      : "Getting your phone preview ready…"}
                   </p>
                   <p className="mt-1 text-[10px] text-warmgrey">
-                    First time can take a minute. We handle the setup.
+                    First time can take 1–2 minutes — no terminal needed.
                   </p>
                 </>
               )}

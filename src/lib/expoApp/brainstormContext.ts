@@ -134,6 +134,12 @@ export function formatBrainstormContextForBuild(
   return parts.join("\n\n");
 }
 
+function isGenericTopicFollowUp(message: string): boolean {
+  return /keep it simple|go deeper|what do you recommend|recommend for my app|your recommendation|what should i do first|tell me more about this/i.test(
+    message.toLowerCase()
+  );
+}
+
 /** Expand vague follow-ups ("full walkthrough", "yes") so the model answers the real thread. */
 export function enrichBrainstormUserMessage(
   message: string,
@@ -146,13 +152,18 @@ export function enrichBrainstormUserMessage(
     /^(yes|yeah|yep|sure|ok|okay|full|walk|deep|continue|go ahead|tell me more|explain)/i.test(
       trimmed
     );
+  const genericFollowUp = isGenericTopicFollowUp(trimmed);
 
   const lastUser = [...history].reverse().find((t) => t.role === "user");
   const parts: string[] = [trimmed];
 
-  if (shortFollowUp && lastUser && lastUser.content !== trimmed) {
+  const continuingThread =
+    (shortFollowUp || genericFollowUp) && lastUser && lastUser.content !== trimmed;
+
+  if (continuingThread) {
     parts.push(
-      `\n\n(Context: I'm continuing from my earlier message — "${lastUser.content}". Answer that topic in depth for this specific app.)`
+      `\n\n(Context: I'm continuing from my earlier message — "${lastUser.content}". ` +
+        `Stay on that exact topic for this specific app. Do not switch to a different checklist item.)`
     );
   }
 
@@ -162,7 +173,7 @@ export function enrichBrainstormUserMessage(
     );
   }
 
-  if (parts.length === 1) {
+  if (parts.length === 1 && !pinnedItem) {
     parts.push(
       "\n\n(Use everything you know about this app's preview, plan, and checklist — be specific to this app, not generic.)"
     );

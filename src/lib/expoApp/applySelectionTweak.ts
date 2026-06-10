@@ -1,4 +1,5 @@
-import { flashChatComplete } from "@/lib/flashChat";
+import { integrations } from "@/lib/config";
+import { buildChatComplete } from "@/lib/planChat";
 import { imageForCategory } from "@/lib/expoApp/images";
 import type { InterviewTurn, MasterBuildPrompt } from "@/lib/types";
 import { appendCoachContext, buildPreviewCoachContext } from "./previewCoachContext";
@@ -110,18 +111,21 @@ async function rewriteLineCopy(
     `Rewrite task: ${task}\n\n` +
     `Write a different line that satisfies the task. Do not repeat the current line verbatim.`;
 
-  // flashChatComplete — same Qwen path as brainstorm (disables thinking, strips empty replies).
-  const { text } = await flashChatComplete(
+  if (!integrations.expoBuildModel) {
+    return chipRewriteFallback(current, task, path, mp.appName);
+  }
+
+  const { text } = await buildChatComplete(
     [
       { role: "system", content: system },
       { role: "user", content: user },
     ],
-    { temperature: 0.72, maxTokens: 160, timeoutMs: 35_000 }
+    { temperature: 0.72, maxTokens: 256, timeoutMs: 60_000 }
   );
 
   let next = cleanOneLine(text);
   if (!next.trim()) {
-    const retry = await flashChatComplete(
+    const retry = await buildChatComplete(
       [
         { role: "system", content: system },
         {
@@ -129,7 +133,7 @@ async function rewriteLineCopy(
           content: `${user}\n\nReply with ONLY the rewritten line, nothing else.`,
         },
       ],
-      { temperature: 0.65, maxTokens: 200, timeoutMs: 40_000 }
+      { temperature: 0.65, maxTokens: 320, timeoutMs: 75_000 }
     );
     next = cleanOneLine(retry.text);
   }

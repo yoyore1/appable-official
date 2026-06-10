@@ -3,6 +3,7 @@ import { formatIntegrationPlaybooks } from "@/lib/connectors/integrationPrompts"
 import type { BrainstormTurn, InterviewTurn, MasterBuildPrompt } from "@/lib/types";
 import { coachBuiltStateBlock } from "./builtState";
 import { isDeepBrainstormMessage } from "./brainstormContext";
+import { inferChecklistItemForTopic } from "./brainstormGuidance";
 import type { AppReadinessAudit, ReadinessItem } from "./readinessAudit";
 import type { ExpoAppModel } from "./types";
 import { founderVoiceBlock } from "./founderVoice";
@@ -91,6 +92,15 @@ function detectIntent(
   if (
     m.length < 48 &&
     /^(yes|yeah|yep|sure|ok|okay|full|walk|deep|continue|go ahead|tell me more)/i.test(m)
+  ) {
+    return "continuation";
+  }
+
+  if (
+    /keep it simple|go deeper|what do you recommend|recommend for my app|your recommendation|what should i do first|tell me more about this/i.test(
+      m
+    ) &&
+    (pinned || history.some((t) => t.role === "user"))
   ) {
     return "continuation";
   }
@@ -240,7 +250,7 @@ function tapCopyCoachingInstructions(appName: string, tapScope: TapEditScope): s
     `Do NOT rewrite role cards, other subtitles, or other screens unless the user tapped those paths. ` +
     `Structure: (1) what's weak about the current line (2) Replace it with: "exact new text" — exactly ONE quoted line ` +
     `(3) why it fits ${appName} (~2 sentences). ~90–140 words. ` +
-    `End with tap **Build** when the line is ready.`;
+    `End with tap **Apply to app** when the line is ready.`;
 
   if (isSharedWelcomeCopyPath(path)) {
     fieldRule +=
@@ -269,10 +279,10 @@ function answerInstructions(
     case "single_item":
       return (
         `Answer ONLY about "${focus}" for ${appName}. ` +
-        `They are the founder building the app — not an end-user inside it. ` +
-        `Sound like a senior engineer brainstorming over coffee — specific, opinionated, no filler openers. ` +
-        `Structure: (1) what the app design already includes for this — skip if listed under Already built (2) demo UI vs production-ready (3) what they'd still need to ship (4) one next step. ` +
-        `Never say you see their screen or preview. Do NOT list other checklist items. ~120–180 words.`
+        `Plain English — cofounder over coffee, not an architecture doc. ` +
+        `Max 4 short sentences: what's in the preview vs what needs real wiring, your ONE launch recommendation. ` +
+        `MUST end by steering them: offer a preview change now (say yes) OR go deeper — never end on Supabase-only homework. ` +
+        `No numbered infra lists. Never say you see their screen. ~90–150 words.`
       );
     case "full_walkthrough":
       return (
@@ -283,7 +293,8 @@ function answerInstructions(
     case "continuation":
       return (
         `Continue the previous topic for ${appName}. Go deeper on what they were asking — ` +
-        `specific to this app, engineer tone, no generic advice. ~150 words.`
+        `specific to this app, plain English. If they said keep it simple, give ONE recommendation. ` +
+        `End with implement-now (say yes) if a preview win exists, otherwise go deeper vs keep it simple. ~150 words.`
       );
     case "copy_coaching":
       return (
@@ -295,7 +306,7 @@ function answerInstructions(
         `If they discuss multiple fields, handle each separately. ` +
         `Do NOT give owner line + walker line unless they asked about both role cards or the role picker as a whole. ` +
         `Do NOT telegram-style answers on follow-ups — keep teaching. ~100–170 words. ` +
-        `When they're happy with the copy, end with tap **Build** to apply.`
+        `When they're happy with the copy, end with tap **Apply to app** (or they can say yes).`
       );
     default:
       return (
@@ -366,14 +377,27 @@ export function retrieveBrainstormContext(
       if (!focusItems.find((f) => f.id === item.id)) focusItems.push(item);
     }
   } else {
+    const lastUser = [...history].reverse().find((t) => t.role === "user");
+
     for (const item of [...fromPin, ...fromMessage]) {
       if (!focusItems.find((f) => f.id === item.id)) focusItems.push(item);
     }
+
+    if (focusItems.length === 0 && intent === "continuation" && lastUser) {
+      for (const item of findItemsInMessage(lastUser.content, items)) {
+        if (!focusItems.find((f) => f.id === item.id)) focusItems.push(item);
+      }
+      if (focusItems.length === 0) {
+        const inferred = inferChecklistItemForTopic(lastUser.content, "", items);
+        if (inferred) focusItems.push(inferred);
+      }
+    }
+
     if (focusItems.length === 0) {
       const best = scoreBestItem(message, items);
       if (best) focusItems.push(best);
     }
-    if (focusItems.length === 0 && audit?.topGaps[0]) {
+    if (focusItems.length === 0 && !pinned && intent !== "continuation" && audit?.topGaps[0]) {
       focusItems.push(audit.topGaps[0]);
     }
     const relatedId = focusItems[0] ? RELATED_ITEM[focusItems[0].id] : undefined;
@@ -412,7 +436,8 @@ export function retrieveBrainstormContext(
 export function formatRetrievedContextForPrompt(
   retrieved: RetrievedBrainstormContext,
   summary?: string | null,
-  connectorNote?: string | null
+  connectorNote?: string | null,
+  previewContext?: string | null
 ): string {
   const parts: string[] = [
     "--- App spine (always true) ---",
@@ -425,6 +450,10 @@ export function formatRetrievedContextForPrompt(
 
   if (retrieved.integrationIds.length > 0) {
     parts.push(formatIntegrationPlaybooks(retrieved.integrationIds, retrieved.appName));
+  }
+
+  if (previewContext?.trim()) {
+    parts.push("--- Preview focus (from phone — do not claim you see their screen) ---", previewContext.trim());
   }
 
   if (retrieved.builtState) {
@@ -502,16 +531,21 @@ export function composeOfflineCoachReply(
     ? `\n\nHeads up — **${related.title}** ties into this (${related.plainWhy.toLowerCase()}).`
     : "";
 
-  const nextStep =
-    item.inPreview && item.status !== "have"
-      ? `Next step: switch to **Build** to change the mockup, or we can plan what "real" ${item.title.toLowerCase()} looks like first.`
-      : `Next step: sketch what ${item.title.toLowerCase()} should do for ${appName}, then wire it in Build or with your backend.`;
+  const body =
+    item.id === "backend" || /location|distance|listing/i.test(item.title)
+      ? `Your preview already has a "near you" vibe on Home, but that's static demo text — not real distance. ` +
+        `For launch I'd put neighborhood or area on each listing card so it feels real without GPS yet.`
+      : `${designBit} ${statusLine} ${item.plainWhy}`;
 
-  return (
-    `${offlineOpener(item.id, item.title, appName)}\n\n` +
-    `${designBit} ${statusLine} ${item.plainWhy}\n\n` +
-    `${nextStep}${relatedBit}`
-  );
+  const closing =
+    item.id === "backend" || /location|distance|listing/i.test(item.title)
+      ? `Want me to add area labels on each listing card in your preview right now? Say **yes**. ` +
+        `Real GPS and your database are the deeper path — say **go deeper** if you want that walkthrough.`
+      : item.inPreview && item.status !== "have"
+        ? `Want me to tweak the mockup in your preview right now? Say **yes** — or say **go deeper** to plan the real version first.`
+        : `There's more to nail on ${item.title.toLowerCase()} — want me to **go deeper**, or **keep it simple** for launch?`;
+
+  return `${offlineOpener(item.id, item.title, appName)}\n\n${body}\n\n${closing}${relatedBit}`;
 }
 
 /** Reject canned templates — never show these to users. */

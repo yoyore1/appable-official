@@ -1,3 +1,5 @@
+import path from "path";
+
 /**
  * Central config for the Appable platform.
  *
@@ -107,6 +109,29 @@ export const integrations = {
   openrouter: Boolean(openrouterConfig.key),
   /** Real GitHub org repo creation vs. mock repo URLs. */
   github: Boolean(env("GITHUB_ORG_TOKEN")),
+  /** Per-project workspace + file-tool code agent (Level B Build). */
+  codeAgent: env("ENABLE_CODE_AGENT") !== "false",
+  /** Expo Build tab tweaks only — Kimi via Fireworks (not interview / initial generate). */
+  expoBuildModel: Boolean(
+    env("FIREWORKS_API_KEY") ||
+      (env("EXPO_BUILD_MODEL_BASE_URL") && env("EXPO_BUILD_MODEL_KEY"))
+  ),
+  /** EAS cloud builds (EXPO_TOKEN on server). */
+  eas: Boolean(env("EXPO_TOKEN")),
+};
+
+/** Level B — per-project git workspaces on disk. */
+export const codeAgentConfig = {
+  workspaceRoot:
+    env("APPABLE_WORKSPACE_ROOT") ??
+    path.join(process.cwd(), ".data", "workspaces"),
+  maxAgentSteps: Number(env("CODE_AGENT_MAX_STEPS") ?? 24),
+  maxInitialAgentSteps: Number(env("CODE_AGENT_MAX_INITIAL_STEPS") ?? 40),
+};
+
+export const easConfig = {
+  token: env("EXPO_TOKEN") ?? "",
+  account: env("EXPO_ACCOUNT") ?? "",
 };
 
 export const supabaseConfig = {
@@ -147,6 +172,22 @@ export const appCodeModel = {
 };
 
 export const planModel = appCodeModel;
+
+/** Fireworks — used only by Expo Build tab (post-initial-build tweaks). */
+export const fireworks = {
+  openaiBase:
+    env("FIREWORKS_BASE_URL") ?? "https://api.fireworks.ai/inference/v1",
+  key: env("FIREWORKS_API_KEY"),
+};
+
+/** Kimi K2.6 on Fireworks for Expo Build room — separate from BUILD_MODEL / initial generate. */
+export const expoBuildModel = {
+  baseUrl: env("EXPO_BUILD_MODEL_BASE_URL") ?? fireworks.openaiBase,
+  key: env("EXPO_BUILD_MODEL_KEY") ?? fireworks.key,
+  name:
+    env("EXPO_BUILD_MODEL_NAME") ??
+    "accounts/fireworks/models/kimi-k2p6",
+};
 
 export const visionModel = {
   baseUrl: deepinfra.openaiBase,

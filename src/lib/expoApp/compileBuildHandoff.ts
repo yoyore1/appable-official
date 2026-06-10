@@ -5,6 +5,8 @@ import type {
   BuildPatchOp,
 } from "@/lib/types";
 import type { ExpoAppModel } from "./types";
+import { enrichBuildUserMessage } from "./buildChatContext";
+import { isPreviewModelTweakRequest, isPreviewUiTopic } from "./brainstormGuidance";
 import {
   expandBuildMessageFromContext,
   extractCopyChangesFromCoach,
@@ -12,6 +14,7 @@ import {
   isVagueBuildFollowUp,
   shouldApplyBrainstormPatches,
 } from "./resolveBuildIntent";
+import { BUILD_DONE_REPLY } from "./buildReply";
 import { getStringAtPath, setStringAtPath } from "./tweakPaths";
 import { compileTapCopyHandoff, tapEditUserForCoach } from "./tapCopyHandoff";
 
@@ -124,15 +127,47 @@ export function compileBuildHandoff(input: {
   pendingBuild?: BrainstormBuildSuggestion | null;
   coachText?: string;
   brainstormContext?: string;
+  buildHistory?: BrainstormTurn[];
 }): CompiledBuildHandoff {
-  const userMessage = input.userMessage?.trim() ?? "";
+  const rawUserMessage = input.userMessage?.trim() ?? "";
+  const buildHistory = input.buildHistory ?? [];
+  const userMessage = enrichBuildUserMessage(rawUserMessage, buildHistory);
   const pending = input.pendingBuild;
   const primaryCoach = input.coachText ?? lastTurn(input.history, "assistant");
   const isHandoffDisplay = /^Applying from brainstorm:/i.test(userMessage);
   const fromBrainstorm = shouldApplyBrainstormPatches(userMessage, pending?.patches);
   const appName = input.appName ?? input.model.profile?.displayName ?? "App";
+  const lastUserTurn = lastTurn(input.history, "user");
 
-  if (pending?.patches?.length) {
+  if (
+    isVagueBuildFollowUp(userMessage) &&
+    pending?.prompt?.trim() &&
+    (!pending.patches?.length || pending.intent === "generic")
+  ) {
+    const prompt = pending.prompt.trim();
+    return {
+      displayPrompt: prompt,
+      applyPrompt: prompt,
+      patches: [],
+      intent: pending.intent ?? "generic",
+    };
+  }
+
+  const previewListingPrompt = [pending?.prompt?.trim(), userMessage].find(
+    (p) => p && isPreviewModelTweakRequest(p)
+  );
+
+  if (previewListingPrompt) {
+    const prompt = previewListingPrompt.trim();
+    return {
+      displayPrompt: prompt,
+      applyPrompt: prompt,
+      patches: [],
+      intent: "generic",
+    };
+  }
+
+  if (pending?.patches?.length && pending.intent !== "generic") {
     const display = /^Applying from brainstorm:/i.test(pending.prompt.trim())
       ? pending.prompt.trim()
       : formatBuildPatchDisplay(pending.patches);
@@ -153,13 +188,23 @@ export function compileBuildHandoff(input: {
   }
 
   let patches: BuildPatchOp[] = [];
-  if (fromBrainstorm && primaryCoach) {
+  const uiPlanningThread =
+    isPreviewUiTopic(lastUserTurn, primaryCoach) ||
+    isPreviewModelTweakRequest(userMessage) ||
+    Boolean(pending?.prompt?.trim() && isPreviewModelTweakRequest(pending.prompt));
+  if (fromBrainstorm && primaryCoach && !uiPlanningThread) {
     patches = patchesFromCoachText(primaryCoach, input.model);
   }
   if (!patches.length && fromBrainstorm && pending?.patches?.length) {
     patches = pending.patches;
   }
-  if (!patches.length && userMessage && !isVagueBuildFollowUp(userMessage) && !isHandoffDisplay) {
+  if (
+    !patches.length &&
+    userMessage &&
+    !isVagueBuildFollowUp(userMessage) &&
+    !isHandoffDisplay &&
+    !isPreviewModelTweakRequest(userMessage)
+  ) {
     patches = patchesFromCoachText(userMessage, input.model);
   }
   patches = dedupePatches(patches);
@@ -202,7 +247,9 @@ export function compileBuildHandoff(input: {
     const expanded = expandBuildMessageFromContext(
       pending.prompt,
       input.history,
-      input.brainstormContext
+      input.brainstormContext,
+      pending.prompt,
+      buildHistory
     );
     return {
       displayPrompt: pending.prompt.trim(),
@@ -228,7 +275,9 @@ export function compileBuildHandoff(input: {
   const expanded = expandBuildMessageFromContext(
     userMessage || "build",
     input.history,
-    input.brainstormContext
+    input.brainstormContext,
+    pending?.prompt,
+    buildHistory
   );
 
   if (backendTask) {
@@ -287,11 +336,8 @@ export function applyBuildPatches(
 
   if (!applied.length) return null;
 
-  const unique = [...new Set(applied)];
-  const onRolePicker = unique.some((l) => /owner|walker|role/i.test(l));
-  const suffix = onRolePicker ? " Check the role picker in the preview." : "";
   return {
     model: next,
-    reply: `Updated ${unique.join(", ")}.${suffix}`,
+    reply: BUILD_DONE_REPLY,
   };
 }

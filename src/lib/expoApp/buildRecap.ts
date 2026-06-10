@@ -29,7 +29,7 @@ export function formatBuildRecap(
   }
 
   lines.push(
-    "Tap any card in the preview → **Save**, collection actions, and profile settings all work."
+    "The phone runs your **real Expo app** — the actual expo-router + React Native code, compiled to web. Build edits the code and it recompiles."
   );
 
   if (recap.suggestedNext) {

@@ -7,6 +7,11 @@ import {
 } from "@/lib/archetypes";
 import { integrations, suggestIdeasModel } from "@/lib/config";
 import { parseDeepInfraCost } from "@/lib/deepinfraCost";
+import {
+  detectSuggestNiche,
+  normalizeSuggestTopic,
+  type SuggestNiche,
+} from "@/lib/suggestTopic";
 
 export type SuggestedAppIdea = {
   name: string;
@@ -78,6 +83,64 @@ function slotTopic(slot: PlaybookSlot, fallback: string): string {
   return slot.nicheTopic?.trim() || fallback;
 }
 
+function smartFallbackCopy(
+  slot: PlaybookSlot,
+  index: number,
+  niche: SuggestNiche,
+  topic: string
+): { description: string; explanation: string } | null {
+  if (niche === "habits") {
+    if (slot.archetype === "habit-streak" && slot.useLikeComparison) {
+      return {
+        description: "Like Duolingo streaks for daily habits — one tap, don't break the chain.",
+        explanation:
+          "Pick a few habits and check in each day. Streaks and gentle reminders keep you consistent without a spreadsheet.",
+      };
+    }
+    if (slot.archetype === "tracker-dashboard" && slot.useLikeComparison) {
+      return {
+        description: "Like Strava for habits — log check-ins and watch your progress add up.",
+        explanation:
+          "Track habits in a few taps. See weekly trends and streaks on one clean dashboard.",
+      };
+    }
+    if (slot.archetype === "journal-notes") {
+      return {
+        description: "A habit journal — quick reflection right after each check-in.",
+        explanation:
+          "Jot a sentence on how each habit went. Spot patterns over time without writing a long diary.",
+      };
+    }
+  }
+
+  if (niche === "fitness") {
+    if (slot.archetype === "tracker-dashboard" && slot.useLikeComparison) {
+      return {
+        description: `Like ${slot.referenceApp} for workouts — log sessions and watch progress.`,
+        explanation:
+          "Log workouts fast. Charts and PRs show how you're improving week over week.",
+      };
+    }
+    if (slot.archetype === "habit-streak" && slot.useLikeComparison) {
+      return {
+        description: "Like Duolingo for gym consistency — streaks for showing up.",
+        explanation:
+          "Check in after each workout. Streaks and reminders help you stay on schedule.",
+      };
+    }
+  }
+
+  if (niche === "pets" && slot.archetype === "booking-scheduling" && slot.useLikeComparison) {
+    return {
+      description: "Like Rover for neighborhood dog walks — owners post, walkers apply.",
+      explanation:
+        "Owners post breed, area, and pay. Walkers browse nearby gigs and match in-app.",
+    };
+  }
+
+  return null;
+}
+
 function ideaFromSlot(
   slot: PlaybookSlot,
   index: number,
@@ -85,13 +148,17 @@ function ideaFromSlot(
   partial?: Partial<SuggestedAppIdea>
 ): SuggestedAppIdea {
   const t = slotTopic(slot, topic);
+  const niche = detectSuggestNiche(t);
+  const smart = partial?.description ? null : smartFallbackCopy(slot, index, niche, t);
   const name = partial?.name ?? fallbackName(slot, index);
   const description =
     partial?.description ??
+    smart?.description ??
     (slot.useLikeComparison
       ? `Like ${slot.referenceApp} for ${t}.`
-      : `A simple ${slot.label.toLowerCase()} focused on ${t}.`);
-  const explanation = partial?.explanation ?? fallbackExplanation(slot, t);
+      : `A ${slot.label.toLowerCase()} built around ${t}.`);
+  const explanation =
+    partial?.explanation ?? smart?.explanation ?? fallbackExplanation(slot, t, niche);
   return {
     name,
     description,
@@ -101,16 +168,37 @@ function ideaFromSlot(
   };
 }
 
-function normalizeIdeas(raw: unknown[], slots: PlaybookSlot[], topic: string): SuggestedAppIdea[] | null {
+function descriptionLooksRobotic(description: string, rawTopic: string): boolean {
+  const d = description.toLowerCase();
+  const raw = rawTopic.trim().toLowerCase();
+  if (raw.length > 10 && d.includes(raw)) return true;
+  if (/\bnew unique\b|\ba new\b.*\bhabit tracker\b/i.test(description)) return true;
+  return false;
+}
+
+function normalizeIdeas(
+  raw: unknown[],
+  slots: PlaybookSlot[],
+  topic: string,
+  rawTopic?: string
+): SuggestedAppIdea[] | null {
   const ideas: SuggestedAppIdea[] = [];
   for (let i = 0; i < raw.length && i < slots.length; i++) {
     const item = raw[i];
     if (!item || typeof item !== "object") continue;
     const o = item as Record<string, unknown>;
     const name = String(o.name ?? o.title ?? o.appName ?? "").trim();
-    const description = String(o.description ?? o.tagline ?? o.hook ?? "").trim();
-    const explanation = String(o.explanation ?? o.detail ?? "").trim();
-    if (!name || !description || !explanation) continue;
+    let description = String(o.description ?? o.tagline ?? o.hook ?? "").trim();
+    let explanation = String(o.explanation ?? o.detail ?? "").trim();
+    if (!name) continue;
+
+    const robotic = rawTopic && description && descriptionLooksRobotic(description, rawTopic);
+    if (!description || !explanation || robotic) {
+      const rebuilt = ideaFromSlot(slots[i]!, i, topic);
+      if (!description || robotic) description = rebuilt.description;
+      if (!explanation) explanation = rebuilt.explanation;
+    }
+    if (!description || !explanation) continue;
     ideas.push(ideaFromSlot(slots[i]!, i, topic, { name, description, explanation }));
   }
   return ideas.length > 0 ? ideas : null;
@@ -119,18 +207,19 @@ function normalizeIdeas(raw: unknown[], slots: PlaybookSlot[], topic: string): S
 function parseIdeasJson(
   text: string,
   slots: PlaybookSlot[],
-  topic: string
+  topic: string,
+  rawTopic?: string
 ): SuggestedAppIdea[] | null {
   const trimmed = stripReasoning(text.trim());
   const tryParse = (raw: string): SuggestedAppIdea[] | null => {
     try {
       const parsed = JSON.parse(raw) as unknown;
-      if (Array.isArray(parsed)) return normalizeIdeas(parsed, slots, topic);
+      if (Array.isArray(parsed)) return normalizeIdeas(parsed, slots, topic, rawTopic);
       if (parsed && typeof parsed === "object") {
         const o = parsed as Record<string, unknown>;
-        if (Array.isArray(o.ideas)) return normalizeIdeas(o.ideas, slots, topic);
+        if (Array.isArray(o.ideas)) return normalizeIdeas(o.ideas, slots, topic, rawTopic);
         if (o.idea && typeof o.idea === "object") {
-          const one = normalizeIdeas([o.idea], slots.slice(0, 1), topic);
+          const one = normalizeIdeas([o.idea], slots.slice(0, 1), topic, rawTopic);
           return one;
         }
       }
@@ -149,9 +238,10 @@ function parseIdeasJson(
 }
 
 function playbookBlock(slots: PlaybookSlot[], topic: string, discover: boolean): string {
+  const normalized = discover ? topic : normalizeSuggestTopic(topic);
   return slots
     .map((slot, i) => {
-      const angle = slotTopic(slot, topic);
+      const angle = slotTopic(slot, normalized);
       const niche = slot.nicheLabel ? `Niche: ${slot.nicheLabel}. ` : "";
       const refs = slot.useLikeComparison
         ? `Reference app: ${slot.referenceApp} (comparison only — never in the name field).`
@@ -165,7 +255,8 @@ function playbookBlock(slots: PlaybookSlot[], topic: string, discover: boolean):
     .concat(
       discover
         ? "\nUser did not enter a topic — each idea MUST be a different niche."
-        : `\nUser topic: "${topic}".`
+        : `\nUser typed: "${topic}". Core concept: "${normalized}". ` +
+            "Never paste their filler words (new, unique, a, an) into descriptions — write about the concept."
     );
 }
 
@@ -182,6 +273,7 @@ function buildBatchPrompt(
     "RULES:\n" +
     "- Ideas 1 & 2: description MUST be one short line starting with “Like [App] for [specific audience or twist]”. Use the reference app for that slot. Never put brand names in name.\n" +
     "- Idea 3: description is a punchy original pitch with NO trademark and NO “like” comparison.\n" +
+    "- Strip filler from the user topic (a, new, unique, my) — write about the real concept (e.g. “habit tracker” → daily habits).\n" +
     "- explanation: exactly 2 short sentences (about 20–35 words). Plain English. What they open the app and do — start with verbs. No jargon.\n" +
     "- name: original, brandable, 2–4 words. Never a trademark.\n" +
     "- Do not imply endorsement or affiliation with any named app.\n" +
@@ -213,9 +305,19 @@ function fallbackName(slot: PlaybookSlot, index: number): string {
   return pool[index % pool.length]!;
 }
 
-function fallbackExplanation(slot: PlaybookSlot, topic: string): string {
-  const t = topic.trim() || "your interest";
+function fallbackExplanation(
+  slot: PlaybookSlot,
+  topic: string,
+  niche: SuggestNiche
+): string {
   const [a, b, c] = slot.features;
+  if (niche === "habits") {
+    return `${a} in a few taps. ${b}, and ${c.charAt(0).toLowerCase()}${c.slice(1)} — all in one simple app.`;
+  }
+  const t = topic.trim() || "your interest";
+  if (t.length > 36) {
+    return `${a}. ${b}, and ${c.charAt(0).toLowerCase()}${c.slice(1)} — all in one simple app.`;
+  }
   return (
     `${a} for ${t} in a few taps. ` +
     `${b}, and ${c.charAt(0).toLowerCase()}${c.slice(1)} — all in one simple app.`
@@ -300,20 +402,23 @@ export async function suggestAppIdeasBatch(
   variant = 0
 ): Promise<{ ideas: SuggestedAppIdea[]; discover: boolean }> {
   const discover = mode === "discover";
-  const t = topic.trim();
-  const slots = resolveSlots(discover ? "discover" : "topic", t, variant);
-  const topicLabel = discover ? "exploring app ideas" : t;
+  const raw = topic.trim();
+  const normalized = discover ? raw : normalizeSuggestTopic(raw);
+  const slots = resolveSlots(discover ? "discover" : "topic", raw, variant);
+  const topicLabel = discover ? "exploring app ideas" : normalized || raw;
   const fallback = playbookFallback(topicLabel, slots);
 
   const isQwen = (suggestIdeasModel.name ?? "").toLowerCase().includes("qwen");
-  const system = buildBatchPrompt(slots, topicLabel, discover, isQwen);
+  const system = buildBatchPrompt(slots, discover ? topicLabel : raw, discover, isQwen);
   const user =
     variant > 0
       ? `Generate 3 fresh beginner-friendly mobile app ideas. Variation ${variant + 1} — new names and angles.`
       : "Generate 3 beginner-friendly mobile app ideas.";
 
   const text = await chatCompletion(system, user, BATCH_MAX_TOKENS, SUGGEST_TIMEOUT_MS);
-  const parsed = text ? parseIdeasJson(text, slots, topicLabel) : null;
+  const parsed = text
+    ? parseIdeasJson(text, slots, topicLabel, discover ? undefined : raw)
+    : null;
 
   if (parsed && parsed.length >= 3) return { ideas: parsed.slice(0, 3), discover };
   if (parsed && parsed.length > 0) {

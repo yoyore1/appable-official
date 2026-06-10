@@ -1,9 +1,16 @@
 import type { BrainstormTurn, InterviewTurn, MasterBuildPrompt } from "@/lib/types";
 import type { ProjectConnectorState } from "@/lib/connectors/registry";
+import {
+  buildExpandedRetrievalQuery,
+  detectRetrievalTopic,
+  mergeRetrievedChunks,
+  pinnedChunkIds,
+  topicScoreAdjust,
+} from "./buildRetrieve";
 import { summarizeBuiltState } from "./builtState";
 import { listEditableCopyFields } from "./previewCopyFields";
 import type { ReadinessItem } from "./readinessAudit";
-import type { ExpoAppModel } from "./types";
+import type { ExpoAppModel, ExpoListItem } from "./types";
 import { getStringAtPath } from "./tweakPaths";
 
 /** One searchable unit — like a Cursor codebase chunk. */
@@ -25,11 +32,64 @@ const SCREEN_HINTS: { re: RegExp; screens: string[] }[] = [
   { re: /\brole\s*picker|choose\s+(your\s+)?role|pick\s+(your\s+)?role\b/i, screens: ["role"] },
   { re: /\b(sign[\s-]?in|log[\s-]?in)\b/i, screens: ["sign-in"] },
   { re: /\b(sign[\s-]?up|register|create\s+account)\b/i, screens: ["sign-up"] },
-  { re: /\bsetup|profile\s+setup|wizard\b/i, screens: ["setup"] },
+  { re: /\bsetup|profile\s+setup|wizard|tell us about you|get started\b/i, screens: ["setup"] },
   { re: /\bhome\b/i, screens: ["home"] },
+  { re: /\blisting(s)?|walk card(s)?|feed card(s)?\b/i, screens: ["home"] },
+  { re: /\bstatus chip(s)?|open|matched|done\b/i, screens: ["home"] },
+  { re: /\bnear you|neighborhood|distance|area label\b/i, screens: ["home"] },
   { re: /\bprofile\b/i, screens: ["profile"] },
   { re: /\bmessages?|chat|inbox\b/i, screens: ["messages"] },
 ];
+
+const LISTING_ITEM_FIELDS: {
+  key: keyof Pick<
+    ExpoListItem,
+    "title" | "subtitle" | "meta" | "badge" | "primaryAction" | "quote"
+  >;
+  emptyHint?: string;
+  alwaysIndex?: boolean;
+}[] = [
+  { key: "title" },
+  { key: "subtitle" },
+  { key: "badge", emptyHint: "(empty — set status chip e.g. Open, Matched, Done)", alwaysIndex: true },
+  { key: "meta", emptyHint: "(empty — neighborhood / distance label)", alwaysIndex: true },
+  { key: "primaryAction" },
+  { key: "quote" },
+];
+
+function indexListItemFields(input: {
+  push: (chunk: BuildContextChunk) => void;
+  screen: string;
+  screenLabel: string;
+  basePath: string;
+  item: ExpoListItem;
+  cardIndex: number;
+}): void {
+  const { push, screen, screenLabel, basePath, item, cardIndex } = input;
+
+  for (const field of LISTING_ITEM_FIELDS) {
+    const val = item[field.key];
+    const str = typeof val === "string" ? val.trim() : "";
+    if (!str && !field.alwaysIndex) continue;
+
+    const path = `${basePath}.${field.key}`;
+    const display = str || field.emptyHint || "(empty)";
+    const chipNote =
+      field.key === "badge" ? " · status chip on card" : field.key === "meta" ? " · area/distance" : "";
+
+    push({
+      id: `item:${path}`,
+      kind: "item",
+      screen,
+      label: `${screenLabel} card ${cardIndex + 1} ${field.key}`,
+      path,
+      value: str || undefined,
+      text:
+        `${screenLabel} · walk listing card ${cardIndex + 1} · ${field.key}${chipNote}: ` +
+        `"${display}" [path: ${path}] title="${item.title}"`,
+    });
+  }
+}
 
 function norm(s: string): string {
   return s.toLowerCase().replace(/[^a-z0-9\s]/g, " ").replace(/\s+/g, " ").trim();
@@ -52,7 +112,7 @@ function overlapScore(a: string, b: string): number {
 
 function quotedPhrases(msg: string): string[] {
   const out: string[] = [];
-  const re = /["']([^"']{4,})["']/g;
+  const re = /"([^"]{4,})"/g;
   let m: RegExpExecArray | null;
   while ((m = re.exec(msg))) out.push(m[1]!.trim());
   return out;
@@ -79,6 +139,7 @@ export function indexBuildContext(input: {
   mp: MasterBuildPrompt;
   interview?: InterviewTurn[];
   brainstormHistory?: BrainstormTurn[];
+  buildHistory?: BrainstormTurn[];
   brainstormSummary?: string;
   connectorNote?: string;
   connectorState?: ProjectConnectorState;
@@ -112,6 +173,68 @@ export function indexBuildContext(input: {
     });
   }
 
+  push({
+    id: "screen:home",
+    kind: "screen",
+    screen: "home",
+    label: "Home tab",
+    text:
+      `Home tab — hero "${model.home.headline}" · ` +
+      `${model.home.sections.reduce((n, s) => n + s.items.length, 0)} walk listing card(s) in sections.`,
+  });
+
+  const listingLines: string[] = [];
+  for (let si = 0; si < model.home.sections.length; si++) {
+    const sec = model.home.sections[si]!;
+    push({
+      id: `screen:home-section-${si}`,
+      kind: "screen",
+      screen: "home",
+      label: `Home section: ${sec.title}`,
+      text: `Home section "${sec.title}" — ${sec.items.length} listing card(s).`,
+    });
+
+    for (let i = 0; i < sec.items.length; i++) {
+      const it = sec.items[i]!;
+      const base = `home.sections[${si}].items[${i}]`;
+      indexListItemFields({
+        push,
+        screen: "home",
+        screenLabel: `Home · ${sec.title}`,
+        basePath: base,
+        item: it,
+        cardIndex: i,
+      });
+      const badge = it.badge?.trim() || "none";
+      const meta = it.meta?.trim() || "none";
+      listingLines.push(
+        `• ${base} "${it.title}" badge:${badge} meta:${meta}`
+      );
+    }
+  }
+
+  if (listingLines.length) {
+    push({
+      id: "listing-summary",
+      kind: "item",
+      screen: "home",
+      label: "All Home listing cards",
+      text:
+        `Home walk listing cards (${listingLines.length}) — use home.sections[n].items[m].badge for status chips ` +
+        `(Open, Matched, Done) and .meta for area/distance:\n${listingLines.slice(0, 12).join("\n")}`,
+    });
+  }
+
+  push({
+    id: "topic:listing-cards",
+    kind: "flow",
+    screen: "home",
+    label: "Listing card editing",
+    text:
+      "Status chips on walk listing cards = home.sections[n].items[m].badge (values like Open, Matched, Done). " +
+      "Area/distance on cards = .meta or .badge. Tab feed cards = tabScreens.{tabId}.items[m].badge.",
+  });
+
   for (const tab of model.tabs) {
     const items = model.tabScreens[tab.id]?.items ?? [];
     push({
@@ -121,29 +244,16 @@ export function indexBuildContext(input: {
       label: `${tab.label} tab`,
       text: `Tab "${tab.label}" (id: ${tab.id}) — ${items.length} card(s) in preview.`,
     });
-    for (let i = 0; i < Math.min(items.length, 8); i++) {
+    for (let i = 0; i < Math.min(items.length, 12); i++) {
       const it = items[i]!;
-      const base = `tabScreens.${tab.id}.items[${i}]`;
-      const fields: { key: string; val?: string }[] = [
-        { key: "title", val: it.title },
-        { key: "subtitle", val: it.subtitle },
-        { key: "primaryAction", val: it.primaryAction },
-        { key: "badge", val: it.badge },
-        { key: "meta", val: it.meta },
-      ];
-      for (const f of fields) {
-        if (!f.val?.trim()) continue;
-        const path = `${base}.${f.key}`;
-        push({
-          id: `item:${path}`,
-          kind: "item",
-          screen: tab.id,
-          label: `${tab.label} card ${i + 1} ${f.key}`,
-          path,
-          value: f.val,
-          text: `${tab.label} tab · card ${i + 1} ${f.key}: "${f.val}" [path: ${path}]`,
-        });
-      }
+      indexListItemFields({
+        push,
+        screen: tab.id,
+        screenLabel: tab.label,
+        basePath: `tabScreens.${tab.id}.items[${i}]`,
+        item: it,
+        cardIndex: i,
+      });
     }
   }
 
@@ -198,13 +308,23 @@ export function indexBuildContext(input: {
     });
   }
 
-  for (const [i, turn] of (input.brainstormHistory ?? []).slice(-6).entries()) {
+  for (const [i, turn] of (input.brainstormHistory ?? []).slice(-4).entries()) {
     push({
       id: `memory:turn:${i}`,
       kind: "memory",
       screen: "brainstorm",
       label: turn.role === "user" ? "Founder said" : "Coach said",
       text: `${turn.role === "user" ? "Founder" : "Coach"}: ${turn.content.slice(0, 400)}`,
+    });
+  }
+
+  for (const [i, turn] of (input.buildHistory ?? []).slice(-6).entries()) {
+    push({
+      id: `memory:build:${i}`,
+      kind: "memory",
+      screen: "build",
+      label: turn.role === "user" ? "Build request" : "Build reply",
+      text: `${turn.role === "user" ? "Founder (Build)" : "Build"}: ${turn.content.slice(0, 400)}`,
     });
   }
 
@@ -221,18 +341,33 @@ export function indexBuildContext(input: {
   return chunks;
 }
 
-/** Retrieve top chunks for this Build message — Cursor-style semantic-ish search. */
+export type RetrieveBuildContextOpts = {
+  buildHistory?: BrainstormTurn[];
+  topK?: number;
+};
+
+/** Retrieve top chunks for this Build message — keyword search + topic lock + pinned thread. */
 export function retrieveBuildContext(
   query: string,
   chunks: BuildContextChunk[],
-  topK = 14
+  topKOrOpts: number | RetrieveBuildContextOpts = 14
 ): BuildContextChunk[] {
-  const nMsg = norm(query);
-  const quotes = quotedPhrases(query);
+  const opts: RetrieveBuildContextOpts =
+    typeof topKOrOpts === "number" ? { topK: topKOrOpts } : topKOrOpts;
+  const topK = opts.topK ?? 14;
+  const buildHistory = opts.buildHistory ?? [];
 
-  return chunks
+  const expandedQuery = buildExpandedRetrievalQuery(query, buildHistory);
+  const topic = detectRetrievalTopic(expandedQuery);
+  const nMsg = norm(expandedQuery);
+  const quotes = quotedPhrases(expandedQuery);
+
+  const scored = chunks
     .map((chunk) => {
-      let score = overlapScore(query, chunk.text) + screenBoost(query, chunk.screen, chunk.label);
+      let score =
+        overlapScore(expandedQuery, chunk.text) +
+        screenBoost(expandedQuery, chunk.screen, chunk.label) +
+        topicScoreAdjust(chunk, topic);
 
       if (chunk.value) {
         const nVal = norm(chunk.value);
@@ -249,23 +384,31 @@ export function retrieveBuildContext(
         score += overlapScore(q, chunk.text) * 0.4;
       }
 
-      if (chunk.kind === "copy" || chunk.kind === "item") score += 0.05;
+      if (chunk.kind === "item") score += 0.08;
+      else if (chunk.kind === "copy" && (topic === "listing" || topic === "status")) {
+        score -= 0.05;
+      } else if (chunk.kind === "copy") score += 0.03;
 
       return { chunk, score };
     })
-    .filter((r) => r.score >= 0.18)
+    .filter((r) => r.score >= 0.15)
     .sort((a, b) => b.score - a.score)
-    .slice(0, topK)
     .map((r) => r.chunk);
+
+  const pinIds = pinnedChunkIds(chunks, buildHistory, topic);
+  const pinned = chunks.filter((c) => pinIds.has(c.id));
+
+  return mergeRetrievedChunks(scored, pinned, Math.max(topK, pinned.length));
 }
 
 /** Format retrieved chunks for the Build agent prompt. */
 export function formatRetrievedBuildContext(
   query: string,
-  retrieved: BuildContextChunk[]
+  retrieved: BuildContextChunk[],
+  buildHistory: BrainstormTurn[] = []
 ): string {
   if (!retrieved.length) {
-    return `No strong match for: "${query.slice(0, 120)}". Search the preview index or ask which screen.`;
+    return `No strong match for: "${query.slice(0, 120)}". Use Build thread + listing-summary paths.`;
   }
 
   const sections: string[] = [
@@ -273,27 +416,66 @@ export function formatRetrievedBuildContext(
     `Query: ${query.trim()}`,
   ];
 
-  const copy = retrieved.filter((c) => c.kind === "copy" || c.kind === "item");
+  const listingItems = retrieved.filter(
+    (c) => c.kind === "item" && (c.path?.includes("home.sections") || c.id === "listing-summary")
+  );
+  const otherItems = retrieved.filter(
+    (c) => c.kind === "item" && !listingItems.includes(c)
+  );
+  const copy = retrieved.filter((c) => c.kind === "copy");
+
+  if (listingItems.length) {
+    sections.push(
+      "Listing cards (status chips = .badge, area = .meta):\n" +
+        listingItems
+          .map((c) => {
+            const val = c.value ?? c.text.match(/"([^"]*)"/)?.[1] ?? "";
+            return `• [${c.screen}] ${c.label} → "${val}" (${c.path})`;
+          })
+          .join("\n")
+    );
+  }
+
+  if (otherItems.length) {
+    sections.push(
+      "Other card fields:\n" +
+        otherItems
+          .map((c) => `• [${c.screen}] ${c.label} → "${c.value ?? ""}" (${c.path})`)
+          .join("\n")
+    );
+  }
+
   if (copy.length) {
     sections.push(
-      "Editable lines:\n" +
+      "Flow copy:\n" +
         copy
           .map((c) => `• [${c.screen}] ${c.label} → "${c.value ?? ""}" (${c.path})`)
           .join("\n")
     );
   }
 
-  const context = retrieved.filter((c) => c.kind !== "copy" && c.kind !== "item");
+  const context = retrieved.filter(
+    (c) => c.kind !== "copy" && c.kind !== "item"
+  );
   if (context.length) {
     sections.push(
       "Context:\n" + context.map((c) => `• ${c.label}: ${c.text.slice(0, 280)}`).join("\n")
     );
   }
 
+  const hasListingPaths = listingItems.some((c) => c.path?.includes("home.sections"));
+  const threadNote = buildHistory.length
+    ? "Build thread is active — continue that task; do not ask unrelated clarifying questions."
+    : "";
+
   sections.push(
     "--- Instructions ---\n" +
-      "Use ONLY paths from editable lines above. Match screen hints (welcome = first screen, role picker, etc.). " +
-      "If nothing fits, set ask with one clarifying question."
+      "Profile setup ('Tell us about you') = flow.setup* — NOT onboarding[n]. " +
+      "Status chips on walk cards: set home.sections[n].items[m].badge to Open, Matched, or Done. " +
+      "Structural ops: remove_role, owner_only, enable_setup_back. " +
+      (hasListingPaths
+        ? `Listing paths are retrieved — apply set ops on those badge/meta fields. ${threadNote}`
+        : threadNote || "Use set ops on the paths above.")
   );
 
   return sections.join("\n\n");

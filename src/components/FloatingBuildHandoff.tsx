@@ -1,7 +1,7 @@
 "use client";
 
 import { AnimatePresence, motion } from "framer-motion";
-import { ArrowRight, Hammer, Loader2 } from "lucide-react";
+import { ArrowRight, Loader2, Sparkles } from "lucide-react";
 
 /** Compact chip — centered above “What to do next”, in normal layout flow. */
 export function FloatingBuildHandoff({
@@ -34,7 +34,7 @@ export function FloatingBuildHandoff({
             {busy ? (
               <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden />
             ) : (
-              <Hammer className="h-3.5 w-3.5" aria-hidden />
+              <Sparkles className="h-3.5 w-3.5" aria-hidden />
             )}
             {label}
             {!busy && <ArrowRight className="h-3.5 w-3.5" aria-hidden />}

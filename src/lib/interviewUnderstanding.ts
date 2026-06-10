@@ -108,7 +108,6 @@ export function clarifyPromptForAnchor(
 ): string {
   const idea = answerFor(interview, "idea");
   const niche = detectInterviewNiche(interview);
-  const terms = ideaKeyTerms(idea);
 
   if (anchor === "idea") {
     if (niche === "alarm-wake") {
@@ -124,10 +123,16 @@ export function clarifyPromptForAnchor(
     if (niche === "alarm-wake") {
       return "Who needs this most — heavy snoozers, people with early shifts, or students with brutal wake-up times?";
     }
-    if (terms.length >= 2) {
-      return `Who'd actually use this — people into ${terms[0]} and ${terms[1]}, or someone else?`;
+    if (niche === "dog-pets") {
+      return "Who's the target audience — dog owners, walkers, or both?";
     }
-    return "Who's the main person this is built for — be as specific as you can.";
+    if (niche === "marketplace") {
+      return "Who's this for — people offering help nearby, people who need it, or both?";
+    }
+    if (niche === "habits" || niche === "fitness") {
+      return "Who's the target audience — people already into it, beginners, or both?";
+    }
+    return "Who's the target audience?";
   }
 
   if (anchor === "features") {
@@ -151,9 +156,8 @@ export function ideaTailoredSuggestions(
   const idea = answerFor(interview, "idea");
   if (!idea.trim()) return null;
   const niche = detectInterviewNiche(interview);
-  const terms = ideaKeyTerms(idea);
 
-  if (stepId === "audience") {
+  if (stepId === "audience" || stepId === "pool_who") {
     if (niche === "alarm-wake") {
       return [
         "Heavy snoozers who need a real wake-up",
@@ -175,16 +179,16 @@ export function ideaTailoredSuggestions(
         "Students staying consistent daily",
       ];
     }
-    if (terms.length >= 2) {
+    if (niche === "fitness") {
       return [
-        `People who struggle with ${terms[0]}`,
-        `Anyone who needs ${terms[1]} in daily life`,
-        `Busy users who want ${terms[0]} without hassle`,
+        "Gym regulars tracking progress",
+        "Beginners starting a routine",
+        "Runners logging miles",
       ];
     }
   }
 
-  if (stepId === "features") {
+  if (stepId === "features" || stepId === "pool_core_loop") {
     if (niche === "alarm-wake") {
       return [
         "Set alarm → must snap outside/sun photo to stop",
@@ -199,11 +203,11 @@ export function ideaTailoredSuggestions(
         "Chat, walk history & in-app payments",
       ];
     }
-    if (terms.length >= 2) {
+    if (niche === "habits" || niche === "fitness") {
       return [
-        `${terms[0]} → ${terms[1]} → done in one flow`,
-        `Quick ${terms[0]} with ${terms[1]} built in`,
-        `Home shows ${terms[0]} — one tap to act`,
+        "Quick daily check-in",
+        "Streak counter & progress chart",
+        "Reminders to stay on track",
       ];
     }
   }

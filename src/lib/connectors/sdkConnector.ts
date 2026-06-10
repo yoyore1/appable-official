@@ -1,6 +1,11 @@
 import type { ConnectorId } from "./catalog";
 import type { ProjectSdkConnector, SdkConnectorPublic } from "@/lib/types";
-import { encryptConnectorSecret, decryptConnectorSecret } from "./encrypt";
+import {
+  ConnectorDecryptError,
+  encryptConnectorSecret,
+  decryptConnectorSecret,
+  tryDecryptConnectorSecret,
+} from "./encrypt";
 import {
   appTierFields,
   getSdkSpec,
@@ -58,7 +63,11 @@ export function sdkConnectorPublic(
 export function decryptSdkSecrets(connector: ProjectSdkConnector): Record<string, string> {
   const out: Record<string, string> = {};
   for (const [key, enc] of Object.entries(connector.secretsEnc)) {
-    out[key] = decryptConnectorSecret(enc);
+    const plain = tryDecryptConnectorSecret(enc);
+    if (plain === null) {
+      throw new ConnectorDecryptError();
+    }
+    out[key] = plain;
   }
   return out;
 }

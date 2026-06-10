@@ -11,6 +11,7 @@ import type { InterviewTurn } from "@/lib/types";
 import {
   APPABLE_PICK,
   fallbackSuggestionsForStep,
+  suggestionsLookLikeAppNames,
 } from "@/lib/interviewSuggestions";
 import type { InterviewStepId } from "@/lib/interviewFlow";
 import {
@@ -228,7 +229,11 @@ function stepGuidance(stepId: string, stepPrompt: string, idea: string): string 
     );
   }
   if (stepId === "name") {
-    return `${header}\nThree short app name ideas that fit this app.`;
+    return (
+      `${header}\n` +
+      "Three short APP NAMES (2–4 words, brandable). NOT features, NOT descriptions. " +
+      'Examples: "Streakly", "Daily Hue", "Habit Ring" — never "daily check-ins" or "streak tracking".'
+    );
   }
   if (stepId === "idea") {
     return "Three distinct, specific app ideas — different domains.";
@@ -286,11 +291,15 @@ function suggestionsValidForStep(
   stepId: string,
   idea: string
 ): boolean {
-  if (items.length < 2 || !suggestionsOnTopic(items, idea)) return false;
+  if (items.length < 2 || !suggestionsOnTopic(items, idea, stepId)) return false;
 
   const blob = items.join(" ").toLowerCase();
 
-  if (stepId === "audience") {
+  if (stepId === "name") {
+    return suggestionsLookLikeAppNames(items);
+  }
+
+  if (stepId === "audience" || stepId === "pool_who") {
     const namesWho =
       /owner|walker|parent|user|people|busy|local|neighbor|gig|student|professional|both|side|teen|adult|snooz|sleeper|morning|alarm|wake|shift|worker|heavy|early|oversleep|riser/i.test(
         blob
@@ -302,9 +311,11 @@ function suggestionsValidForStep(
     return namesWho && !soundsLikeNotes;
   }
 
-  if (stepId === "features") {
-    return !/anything we should lock in|how detailed it gets|what info users must enter/i.test(
-      blob
+  if (stepId === "features" || stepId === "pool_core_loop") {
+    return (
+      !/anything we should lock in|how detailed it gets|what info users must enter/i.test(
+        blob
+      ) && !suggestionsLookLikeAppNames(items)
     );
   }
 
@@ -332,8 +343,16 @@ function wordInText(word: string, text: string): boolean {
   return false;
 }
 
-function suggestionsOnTopic(items: string[], idea: string): boolean {
-  if (items.length < 2 || !idea.trim()) return items.length >= 2;
+function suggestionsOnTopic(
+  items: string[],
+  idea: string,
+  stepId: string
+): boolean {
+  if (items.length < 2) return false;
+  if (!idea.trim()) return true;
+  // Audience pills name people/roles — they won't always repeat idea tokens like "strava".
+  if (stepId === "audience" || stepId === "pool_who") return true;
+  if (stepId === "name") return suggestionsLookLikeAppNames(items);
   const blob = items.join(" ");
   const ideaWords = idea
     .toLowerCase()
@@ -413,6 +432,16 @@ function finalizeSuggestionPills(items: string[]): string[] {
   return [...items.slice(0, 3), APPABLE_PICK];
 }
 
+const DEDICATED_FALLBACK_STEPS = new Set<InterviewStepId>([
+  "audience",
+  "features",
+  "name",
+  "colors",
+  "idea",
+  "pool_who",
+  "pool_core_loop",
+]);
+
 /** Local pills — only when Qwen is down or every retry failed. */
 function localSuggestionFallback(
   stepId: InterviewStepId,
@@ -420,11 +449,12 @@ function localSuggestionFallback(
 ): string[] {
   const fallback = fallbackSuggestionsForStep(stepId, interview);
   const nonPick = fallback.filter((s) => s !== APPABLE_PICK);
-  if (nonPick.length >= 2) return fallback;
+  if (nonPick.length >= 1) return finalizeSuggestionPills(nonPick);
+  if (DEDICATED_FALLBACK_STEPS.has(stepId)) return [APPABLE_PICK];
   const tailored = ideaTailoredSuggestions(stepId, interview);
   const tailoredNonPick = tailored?.filter((s) => s !== APPABLE_PICK) ?? [];
-  if (tailoredNonPick.length >= 2) {
-    return [...tailoredNonPick.slice(0, 3), APPABLE_PICK];
+  if (tailoredNonPick.length >= 1) {
+    return finalizeSuggestionPills(tailoredNonPick);
   }
   return [APPABLE_PICK];
 }

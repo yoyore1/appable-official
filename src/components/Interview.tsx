@@ -9,7 +9,10 @@ import {
   type InterviewStep,
   type InterviewStepId,
 } from "@/lib/interviewFlow";
-import { APPABLE_PICK } from "@/lib/interviewSuggestions";
+import {
+  APPABLE_PICK,
+  prefetchSuggestionsUsable,
+} from "@/lib/interviewSuggestions";
 import {
   answerInterview,
   finishInterview,
@@ -390,13 +393,15 @@ export function Interview({
         if (res.nextAppablePick?.trim()) {
           appablePickByStep.current[res.nextStep.id] = res.nextAppablePick.trim();
         }
-        const rich =
-          (res.suggestions?.filter((s) => s !== APPABLE_PICK).length ?? 0) >= 2;
+        const rich = prefetchSuggestionsUsable(
+          res.nextStep.id,
+          res.suggestions
+        );
         if (rich && res.suggestions?.length) {
           setStepSuggestions(res.suggestions);
           suggestionsLoadedFor.current = res.nextStep.id;
         } else {
-          void loadStepChoices(res.nextStep.id);
+          await loadStepChoices(res.nextStep.id);
         }
         setBusy(true);
         await revealQuestion(res.nextStep.id, res.nextStep.prompt, {

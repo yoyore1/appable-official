@@ -56,7 +56,7 @@ export function resolveBuildHandoff(input: {
     const prompt = buildPromptForFloatingBuild(input.history, input.pendingBuild);
     if (!prompt.trim()) return null;
     return {
-      label: "Build",
+      label: input.pendingBuild?.label?.trim() || "Apply to app",
       prompt,
       displayPrompt: prompt,
       patches: input.pendingBuild?.patches ?? [],
@@ -74,7 +74,7 @@ export function resolveBuildHandoff(input: {
   if (!compiled.displayPrompt.trim() && !compiled.patches.length) return null;
 
   return {
-    label: "Build",
+    label: input.pendingBuild?.label?.trim() || "Apply to app",
     prompt: compiled.applyPrompt,
     displayPrompt: compiled.displayPrompt,
     patches: compiled.patches,

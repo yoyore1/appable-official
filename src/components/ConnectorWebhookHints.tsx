@@ -24,7 +24,9 @@ export function ConnectorWebhookHints({
 
   useEffect(() => {
     if (!showRevenueCat && !showSupabase) return;
-    void getConnectorWebhookSecrets(projectId).then(setData);
+    void getConnectorWebhookSecrets(projectId)
+      .then(setData)
+      .catch(() => setData({ ok: false, message: "Could not load webhook secrets." }));
   }, [projectId, showRevenueCat, showSupabase]);
 
   if (!data || !data.ok) return null;

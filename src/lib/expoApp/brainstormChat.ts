@@ -1,4 +1,11 @@
 import { flashChatComplete } from "@/lib/flashChat";
+import {
+  brainstormCoachComplete,
+  pickBrainstormModelTier,
+  type BrainstormModelTier,
+} from "./brainstormModel";
+import { formatPreviewContextForBrainstorm } from "./previewBrainstormContext";
+import type { PreviewBuildState } from "./previewBuildState";
 import type {
   BrainstormBuildSuggestion,
   BrainstormTurn,
@@ -17,6 +24,14 @@ import type { ReadinessItem } from "./readinessAudit";
 import { auditAppReadiness, type AppReadinessAudit } from "./readinessAudit";
 import type { ExpoAppModel } from "./types";
 import { founderVoiceBlock } from "./founderVoice";
+import {
+  COACH_GUIDANCE_RULES,
+  ensureBrainstormGuidanceClosing,
+  resolvePreviewBuildSuggestion,
+  shouldPersistPendingBuild,
+} from "./brainstormGuidance";
+import { isAdviceOnlyText, isBrainstormReadyToApply, NORMIE_COACH_RULES } from "./brainstormNormie";
+import { resolveBuildHandoff } from "./buildHandoff";
 
 export type { BrainstormTurn } from "@/lib/types";
 
@@ -47,9 +62,12 @@ const COACH_VOICE =
   "Google + Apple sign-in guides live under Connections. Never paste API keys in chat. " +
   "**Copy & UX:** Coach copy like a senior product writer — quote the problem, propose exact replacement text in quotes, explain WHY for this app. " +
   "On follow-ups (shorter, simpler, clearer, who is this for): keep that structure — never collapse to just the quote. " +
-  "When copy is finalized, end with tap **Build** — do NOT ask 'Want to update?' again. " +
-  "Reply briefly ONLY when the user confirms Build with yes/ok/do it — not when they ask for another draft. " +
-  "Only mention integrations when they explicitly ask — never at the end of copy talk.";
+  "When copy is finalized, tell them to tap **Apply to app** (or say yes) — do NOT ask 'Want to update?' again. " +
+  "Reply briefly ONLY when the user confirms with yes/ok/do it — not when they ask for another draft. " +
+  "Only mention integrations when they explicitly ask — never at the end of copy talk.\n\n" +
+  NORMIE_COACH_RULES +
+  "\n\n" +
+  COACH_GUIDANCE_RULES;
 
 const TIRED_OPENER_RE =
   /^(oh,?\s*i get it|here'?s the thing|yeah,?\s*i get it|got it,?)\b/i;
@@ -115,14 +133,11 @@ function buildMessages(
 
 async function coachReply(
   messages: { role: "system" | "user" | "assistant"; content: string }[],
-  longForm: boolean
+  longForm: boolean,
+  tier: BrainstormModelTier
 ): Promise<string> {
-  const { text } = await flashChatComplete(messages, {
-    temperature: 0.78,
-    maxTokens: longForm ? 650 : 450,
-    timeoutMs: longForm ? 40_000 : 30_000,
-  });
-  return text.trim();
+  const { text } = await brainstormCoachComplete(messages, tier, longForm);
+  return text;
 }
 
 async function refreshBrainstormSummary(
@@ -177,7 +192,7 @@ async function detectBuildSuggestion(
         role: "system",
         content:
           `JSON only. Backend-only work (Supabase tables, legal, no preview UI copy)? ` +
-          `{"suggest":false} OR {"suggest":true,"label":"Build","prompt":"short backend instruction"}. ` +
+          `{"suggest":false} OR {"suggest":true,"label":"Apply to app","prompt":"short backend instruction"}. ` +
           `suggest:false for preview copy — that is handled separately.`,
       },
       {
@@ -208,6 +223,8 @@ export async function runBrainstormChat(
     pinnedItem?: ReadinessItem | null;
     existingSummary?: string;
     connectorNote?: string;
+    previewState?: PreviewBuildState;
+    hasAttachments?: boolean;
   }
 ): Promise<BrainstormChatResult> {
   const previewModel = options?.model ?? null;
@@ -229,10 +246,15 @@ export async function runBrainstormChat(
     summary
   );
 
+  const previewContext = formatPreviewContextForBrainstorm(
+    options?.previewState,
+    previewModel
+  );
   const contextBlock = formatRetrievedContextForPrompt(
     retrieved,
     summary,
-    options?.connectorNote
+    options?.connectorNote,
+    previewContext
   );
   const system = buildSystemPrompt(mp, contextBlock, history);
   const longForm =
@@ -241,8 +263,11 @@ export async function runBrainstormChat(
     isDeepBrainstormMessage(message, history);
 
   const messages = buildMessages(system, history, message.trim());
+  const modelTier = pickBrainstormModelTier(message, history, retrieved.intent, {
+    hasAttachments: options?.hasAttachments,
+  });
 
-  let reply = await coachReply(messages, longForm);
+  let reply = await coachReply(messages, longForm, modelTier);
 
   if (!reply || isGenericBrainstormReply(reply)) {
     reply = await coachReply(
@@ -254,7 +279,8 @@ export async function runBrainstormChat(
         history,
         message.trim()
       ),
-      longForm
+      longForm,
+      modelTier
     );
   }
 
@@ -264,10 +290,54 @@ export async function runBrainstormChat(
 
   reply = stripTiredOpeners(reply).slice(0, 1200);
 
-  const [nextSummary, buildSuggestion] = await Promise.all([
+  if (isAdviceOnlyText(reply) && retrieved.intent !== "full_walkthrough") {
+    const { text: shorter } = await flashChatComplete(
+      [
+        {
+          role: "system",
+          content:
+            `Rewrite for a non-technical founder. Max 4 short sentences. ` +
+            `One recommendation, then offer implement-now (say yes) OR go deeper. ` +
+            `No numbered lists. No PostGIS/Haversine/schema-only next steps. ` +
+            `App: ${mp.appName}`,
+        },
+        { role: "user", content: reply },
+      ],
+      { temperature: 0.5, maxTokens: 220, timeoutMs: 25_000 }
+    );
+    if (shorter.trim().length >= 40) {
+      reply = shorter.trim();
+    }
+  }
+
+  reply = ensureBrainstormGuidanceClosing(reply, message, mp.appName, retrieved.intent);
+
+  const previewSuggestion = resolvePreviewBuildSuggestion(message, reply, mp.appName);
+
+  const [nextSummary, detectedSuggestion] = await Promise.all([
     refreshBrainstormSummary(mp, summary, message, reply),
-    detectBuildSuggestion(mp, message, reply, previewModel, history),
+    previewSuggestion
+      ? Promise.resolve(null)
+      : detectBuildSuggestion(mp, message, reply, previewModel, history),
   ]);
 
-  return { reply, buildSuggestion, summary: nextSummary };
+  const buildSuggestion = previewSuggestion ?? detectedSuggestion;
+
+  const threadAfter: BrainstormTurn[] = [
+    ...history,
+    { role: "user", content: message },
+    { role: "assistant", content: reply },
+  ];
+  const handoff = resolveBuildHandoff({
+    history: threadAfter,
+    pendingBuild: buildSuggestion,
+    model: previewModel,
+    appName: mp.appName,
+  });
+  const applyReady = isBrainstormReadyToApply(handoff, buildSuggestion, threadAfter);
+  const gatedSuggestion = shouldPersistPendingBuild(buildSuggestion, reply, applyReady)
+    ? buildSuggestion
+    : null;
+
+  return { reply, buildSuggestion: gatedSuggestion, summary: nextSummary };
 }

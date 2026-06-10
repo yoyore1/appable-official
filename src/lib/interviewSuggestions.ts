@@ -13,6 +13,32 @@ import type { InterviewTurn } from "@/lib/types";
 /** Shown as the last pill on every spine question. */
 export const APPABLE_PICK = "Let Appable pick";
 
+const FEATURE_LEAK_RE =
+  /check.?in|streak|reminder|chart|progress|counter|momentum|tracking|\blog\b|\btap\b|browse|notification|dashboard|weekly|daily habit|feature|button|screen|record|appointment|schedule|simple app/i;
+
+/** True when pills look like app names, not feature descriptions. */
+export function suggestionsLookLikeAppNames(items: string[]): boolean {
+  if (items.length < 2) return false;
+  for (const s of items) {
+    const t = s.trim();
+    if (!t || t.length > 36 || t.split(/\s+/).length > 4) return false;
+    if (/→|->|,|;|&/.test(t)) return false;
+    if (FEATURE_LEAK_RE.test(t)) return false;
+  }
+  return true;
+}
+
+export function prefetchSuggestionsUsable(
+  stepId: InterviewStepId,
+  suggestions: string[] | undefined
+): boolean {
+  if (!suggestions?.length) return false;
+  const nonPick = suggestions.filter((s) => s !== APPABLE_PICK);
+  if (nonPick.length < 2) return false;
+  if (stepId === "name") return suggestionsLookLikeAppNames(nonPick);
+  return true;
+}
+
 type AppCategory =
   | "dog-pets"
   | "marketplace"
@@ -339,9 +365,6 @@ export function fallbackSuggestionsForStep(
   stepId: InterviewStepId,
   interview: InterviewTurn[]
 ): string[] {
-  const tailored = ideaTailoredSuggestions(stepId, interview);
-  if (tailored?.length) return [...tailored, APPABLE_PICK];
-
   switch (stepId) {
     case "audience":
       return audienceSuggestions(interview);
@@ -359,19 +382,23 @@ export function fallbackSuggestionsForStep(
       return followupFeaturesSuggestions(interview);
     case "followup_recipe_depth":
       return followupRecipeDepthSuggestions(interview);
+    case "pool_who":
+      return audienceSuggestions(interview);
+    case "pool_core_loop":
+      return featuresSuggestions(interview);
     case "followup_clarify_idea":
     case "followup_clarify_audience":
     case "followup_clarify_features":
-    case "pool_who":
-    case "pool_core_loop":
     case "pool_rules":
     case "pool_proof":
-    case "pool_first_use":
-      return ideaTailoredSuggestions(stepId, interview)
-        ? [...(ideaTailoredSuggestions(stepId, interview) ?? []), APPABLE_PICK]
-        : [APPABLE_PICK];
-    default:
-      return [APPABLE_PICK];
+    case "pool_first_use": {
+      const tailored = ideaTailoredSuggestions(stepId, interview);
+      return tailored?.length ? [...tailored, APPABLE_PICK] : [APPABLE_PICK];
+    }
+    default: {
+      const tailored = ideaTailoredSuggestions(stepId, interview);
+      return tailored?.length ? [...tailored, APPABLE_PICK] : [APPABLE_PICK];
+    }
   }
 }
 

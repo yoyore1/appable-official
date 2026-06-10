@@ -5,12 +5,15 @@
  *
  * - chat model (Step 3.5) → ASO copy, tweak chat
  * - chat model (Qwen 3.6) → interview acks, suggestion pills, brainstorm coach
- * - plan model (Kimi K2.6) → master-prompt synthesis
+ * - plan model (Kimi K2.6) → master-prompt synthesis, Build tab edits
  * - image model           → launch-pack screenshots + icon
  * - video model           → launch-pack video ad specs (stub)
  */
 import { chatModel, integrations, planModel } from "@/lib/config";
-import { APPABLE_PICK } from "@/lib/interviewSuggestions";
+import {
+  APPABLE_PICK,
+  fallbackSuggestionsForStep,
+} from "@/lib/interviewSuggestions";
 import {
   interviewAiAck,
   interviewAiRecommend,
@@ -634,10 +637,13 @@ export async function interviewSuggestionsForStep(
   stepPrompt: string,
   interview: InterviewTurn[]
 ): Promise<string[]> {
-  if (interviewLlmReady()) {
-    return interviewAiSuggestions(stepId, stepPrompt, interview);
+  if (!interviewLlmReady()) {
+    return fallbackSuggestionsForStep(
+      stepId as import("@/lib/interviewFlow").InterviewStepId,
+      interview
+    );
   }
-  return [APPABLE_PICK];
+  return interviewAiSuggestions(stepId, stepPrompt, interview);
 }
 
 /** Resolve "Let Appable pick" from full interview context. */

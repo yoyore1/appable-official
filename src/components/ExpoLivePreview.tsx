@@ -26,6 +26,7 @@ import {
   Bell,
   Shield,
   HelpCircle,
+  ChevronLeft,
   ChevronRight,
   Loader2,
   X,
@@ -85,6 +86,7 @@ import {
 } from "@/lib/expoApp/previewActions";
 import { withLegalSettings } from "@/lib/expoApp/smartInteractions";
 import { recipeListenText } from "@/lib/expoApp/recipeDetails";
+import type { PreviewBuildState } from "@/lib/expoApp/previewBuildState";
 import type { TweakTarget } from "@/lib/expoApp/tweakPaths";
 import { DeviceMockup } from "@/components/DeviceMockup";
 import type { EditPick } from "@/components/PreviewEditChrome";
@@ -344,6 +346,7 @@ export function ExpoLivePreview({
   selectedTarget,
   onSelectTarget,
   showWatermark,
+  onPreviewBuildStateChange,
 }: {
   projectId?: string;
   model: ExpoAppModel | null;
@@ -364,6 +367,8 @@ export function ExpoLivePreview({
   onSelectTarget?: (target: TweakTarget) => void;
   /** Free-tier "Made with Appable" badge on the preview. */
   showWatermark?: boolean;
+  /** Reports which launch screen is visible — sent with Build requests. */
+  onPreviewBuildStateChange?: (state: PreviewBuildState) => void;
 }) {
   type LaunchPhase = "auth" | "role" | "setup" | "onboarding" | "main";
   const [launchPhase, setLaunchPhase] = useState<LaunchPhase>("main");
@@ -371,6 +376,15 @@ export function ExpoLivePreview({
   const [onboarded, setOnboarded] = useState(Boolean(startPastOnboarding));
   const [selectedRole, setSelectedRole] = useState<ExpoUserRole | null>(null);
   const [tab, setTab] = useState(model?.tabs[0]?.id ?? "home");
+
+  useEffect(() => {
+    onPreviewBuildStateChange?.({
+      launchPhase,
+      onboardingIndex: onboardIdx,
+      selectedRoleId: selectedRole?.id,
+      selectedRoleLabel: selectedRole?.label,
+    });
+  }, [launchPhase, onboardIdx, selectedRole, onPreviewBuildStateChange]);
   const [detail, setDetail] = useState<ExpoListItem | null>(null);
   const [checked, setChecked] = useState<Set<string>>(new Set());
   const [scanOpen, setScanOpen] = useState(false);
@@ -490,9 +504,23 @@ export function ExpoLivePreview({
       return;
     }
 
-    if (model.flow?.roles?.length) {
-      setLaunchPhase("role");
-      setOnboarded(Boolean(startPastOnboarding));
+    const roles = model.flow?.roles ?? [];
+    if (roles.length) {
+      const skipPicker = model.flow?.singleRoleMode || roles.length === 1;
+      if (skipPicker) {
+        setSelectedRole(roles[0]!);
+        if (model.flow?.setupFields?.length) {
+          setLaunchPhase("setup");
+        } else if (model.onboarding?.length && !startPastOnboarding) {
+          setLaunchPhase("onboarding");
+        } else {
+          setLaunchPhase("main");
+          setOnboarded(Boolean(startPastOnboarding));
+        }
+      } else {
+        setLaunchPhase("role");
+        setOnboarded(Boolean(startPastOnboarding));
+      }
       return;
     }
 
@@ -537,7 +565,16 @@ export function ExpoLivePreview({
       setLaunchPhase("auth");
       setOnboarded(false);
     } else if (m?.flow?.roles?.length) {
-      setLaunchPhase("role");
+      const roles = m.flow.roles;
+      const skipPicker = m.flow.singleRoleMode || roles.length === 1;
+      if (skipPicker) {
+        setSelectedRole(roles[0]!);
+        if (m.flow.setupFields?.length) setLaunchPhase("setup");
+        else if (m.onboarding.length && !startPastOnboarding) setLaunchPhase("onboarding");
+        else setLaunchPhase("main");
+      } else {
+        setLaunchPhase("role");
+      }
       setOnboarded(Boolean(startPastOnboarding));
     } else if (m?.onboarding.length && !startPastOnboarding) {
       setLaunchPhase("onboarding");
@@ -1042,7 +1079,10 @@ export function ExpoLivePreview({
                   onSelectTarget={onSelectTarget}
                   onSuccess={finishAuthSignUp}
                 />
-              ) : launchPhase === "role" && readyModel.flow?.roles?.length ? (
+              ) : launchPhase === "role" &&
+                readyModel.flow?.roles &&
+                readyModel.flow.roles.length > 1 &&
+                !readyModel.flow.singleRoleMode ? (
                 <RoleSelectScreen
                   key="role"
                   flow={readyModel.flow}
@@ -1075,6 +1115,13 @@ export function ExpoLivePreview({
           editPick={editPick}
                   selectedTarget={selectedTarget}
                   onSelectTarget={onSelectTarget}
+                  onBack={() => {
+                    if (editMode) return;
+                    const roles = readyModel.flow?.roles ?? [];
+                    if (roles.length > 1 && !readyModel.flow?.singleRoleMode) {
+                      setLaunchPhase("role");
+                    }
+                  }}
                   onDone={() => {
                     if (editMode) return;
                     if (readyModel.onboarding.length && !startPastOnboarding) {
@@ -1795,6 +1842,8 @@ function modelStructureSignature(model: ExpoAppModel): string {
   return JSON.stringify({
     auth: Boolean(model.flow?.auth?.enabled),
     roles: model.flow?.roles?.map((r) => r.id) ?? [],
+    singleRole: Boolean(model.flow?.singleRoleMode),
+    setupBack: Boolean(model.flow?.setupShowBack),
     setupLen: model.flow?.setupFields?.length ?? 0,
     onboardingLen: model.onboarding?.length ?? 0,
     tabIds: model.tabs.map((tab) => tab.id),
@@ -2326,11 +2375,13 @@ function SetupWizardScreen({
   editPick,
   selectedTarget,
   onSelectTarget,
+  onBack,
   onDone,
 }: FixEditProps & {
   flow: ExpoAppFlow;
   theme: ExpoAppModel["theme"];
   roleLabel?: string;
+  onBack?: () => void;
   onDone: () => void;
 }) {
   const t = theme;
@@ -2363,6 +2414,20 @@ function SetupWizardScreen({
       animate={{ opacity: 1, y: 0 }}
       className="flex h-full flex-col overflow-y-auto pb-2"
     >
+      {flow.setupShowBack && onBack ? (
+        <button
+          type="button"
+          onClick={() => {
+            if (editMode) return;
+            onBack();
+          }}
+          className="mb-2 flex items-center gap-0.5 text-[10px] font-semibold"
+          style={{ color: t.muted }}
+        >
+          <ChevronLeft className="h-3.5 w-3.5" aria-hidden />
+          {flow.setupBackLabel ?? "Back"}
+        </button>
+      ) : null}
       <Selectable
         editMode={editMode}
           editPick={editPick}
@@ -3219,6 +3284,14 @@ function TabScreen({
   );
 }
 
+function listingStatusChipStyle(badge: string, accent: string): { background: string; color: string } {
+  const b = badge.trim().toLowerCase();
+  if (b === "open") return { background: "rgba(34,197,94,0.14)", color: "#15803d" };
+  if (b === "matched") return { background: "rgba(59,130,246,0.14)", color: "#1d4ed8" };
+  if (b === "done") return { background: "rgba(100,116,139,0.16)", color: "#475569" };
+  return { background: `${accent}18`, color: accent };
+}
+
 function ItemCard({
   item,
   itemPath,
@@ -3275,7 +3348,7 @@ function ItemCard({
         >
           <span
             className="inline-block rounded-md px-1 py-0.5 text-[7px] font-bold uppercase"
-            style={{ background: `${theme.accent}18`, color: theme.accent }}
+            style={listingStatusChipStyle(item.badge, theme.accent)}
           >
             {item.badge}
           </span>
@@ -3296,7 +3369,7 @@ function ItemCard({
       {item.badge && (
         <span
           className="rounded-md px-1 py-0.5 text-[7px] font-bold uppercase"
-          style={{ background: `${theme.accent}18`, color: theme.accent }}
+          style={listingStatusChipStyle(item.badge, theme.accent)}
         >
           {item.badge}
         </span>

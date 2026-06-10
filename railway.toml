@@ -1,0 +1,14 @@
+# Railway reads this automatically — no manual Build/Start in the dashboard.
+#
+# After first deploy, in the Railway dashboard (not in this file):
+#   1. Volumes → Add volume → Mount path: /app/.data
+#   2. Settings → Resources → Memory: 2 GB+
+#   3. Redeploy once after attaching the volume
+
+[build]
+buildCommand = "npm run build"
+
+[deploy]
+startCommand = "npm start"
+healthcheckPath = "/"
+restartPolicyType = "ON_FAILURE"

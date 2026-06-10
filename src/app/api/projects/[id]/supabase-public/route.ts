@@ -23,12 +23,22 @@ export async function GET(
     return NextResponse.json({ error: "not_connected" }, { status: 409 });
   }
 
-  const { anonKey } = decryptSupabaseConnectorSecrets(connector);
-
-  return NextResponse.json({
-    url: connector.public.url,
-    anonKey,
-    projectRef: connector.public.projectRef,
-    profilesTable: "appable_profiles",
-  });
+  try {
+    const { anonKey } = decryptSupabaseConnectorSecrets(connector);
+    return NextResponse.json({
+      url: connector.public.url,
+      anonKey,
+      projectRef: connector.public.projectRef,
+      profilesTable: "appable_profiles",
+    });
+  } catch {
+    return NextResponse.json(
+      {
+        error: "decrypt_failed",
+        message:
+          "Reconnect Supabase in Connections — stored keys no longer match this server.",
+      },
+      { status: 409 }
+    );
+  }
 }

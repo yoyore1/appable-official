@@ -7,10 +7,8 @@ import {
   Check,
   Loader2,
   Pencil,
-  Pin,
   Send,
   Sparkles,
-  X,
 } from "lucide-react";
 import { AiBudgetBar } from "@/components/AiBudgetBar";
 import { ChatAttachButton } from "@/components/ChatAttachButton";
@@ -22,15 +20,22 @@ import { PreviewEditChrome, type EditPick } from "@/components/PreviewEditChrome
 import { PreviewFixPanel } from "@/components/PreviewFixPanel";
 import { TapToAskPanel } from "@/components/TapToAskPanel";
 import type { TapToAskSuggestion } from "@/lib/expoApp/tapToAsk";
-import { ExpoLivePreview } from "@/components/ExpoLivePreview";
+import { ExpoWorkspacePreview } from "@/components/ExpoWorkspacePreview";
 import { ExpoPhoneGuide } from "@/components/ExpoPhoneGuide";
 import { PreviewCanvasPicker } from "@/components/PreviewCanvasPicker";
 import { FloatingBuildHandoff } from "@/components/FloatingBuildHandoff";
 import { BuildSidePanel } from "@/components/BuildSidePanel";
 import { ReadinessSuggestionBar } from "@/components/ReadinessSuggestionBar";
 import { InsightSuggestionBar } from "@/components/InsightSuggestionBar";
-import { resolveBuildHandoff } from "@/lib/expoApp/buildHandoff";
+import {
+  isBrainstormApplyConfirmation,
+  resolveBrainstormApplyHandoff,
+  shouldAutoApplyFromBrainstorm,
+  type BrainstormApplyHandoff,
+} from "@/lib/expoApp/brainstormApply";
+import { resolveDiscussPinItem } from "@/lib/expoApp/brainstormGuidance";
 import { defaultBrainstormState } from "@/lib/expoApp/brainstormContext";
+import { defaultBuildState } from "@/lib/expoApp/buildChatContext";
 import { TypingIndicator } from "@/components/TypingIndicator";
 import { formatBuildRecap } from "@/lib/expoApp/buildRecap";
 import { applyConnectorsToAudit } from "@/lib/connectors/readinessConnector";
@@ -68,17 +73,27 @@ import {
   rolePickerSiblingField,
   type TweakTarget,
 } from "@/lib/expoApp/tweakPaths";
+import type { PreviewBuildState } from "@/lib/expoApp/previewBuildState";
+import { previewStateFromTarget } from "@/lib/expoApp/previewBuildState";
+import { coerceExpoAppModel } from "@/lib/expoApp/coerceModel";
 import type { ExpoAppModel } from "@/lib/expoApp/types";
 import {
   clearBrainstormBuildSuggestion,
   expoBrainstormChat,
   expoSelectionTweak,
+  expoTapEdit,
   expoTweakChat,
   patchProjectReadiness,
   prepareExpoBuild,
   runExpoWebBuild,
   updateExpoPlan,
 } from "@/server/projects";
+import { TapEditPanel, type TapEditValue } from "@/components/TapEditPanel";
+import type {
+  PreviewStatusUpdate,
+  TapPayload,
+  WorkspacePreviewHandle,
+} from "@/components/ExpoWorkspacePreview";
 import { buildHandoffFromInsight } from "@/lib/insights/buildHandoff";
 import {
   connectedIntegrationIds,
@@ -95,6 +110,7 @@ import type {
   MasterBuildPrompt,
   Project,
   ProjectBrainstormState,
+  ProjectBuildState,
   ProjectReadinessState,
   RailwayConnectorPublic,
   RevenueCatConnectorPublic,
@@ -167,6 +183,14 @@ function mergeBrainstormBubbles(prev: Bubble[], history: BrainstormTurn[]) {
   return [...intro, ...brainstormHistoryToBubbles(history)];
 }
 
+function buildHistoryToBubbles(history: BrainstormTurn[]): Bubble[] {
+  return history.map((turn, i) => ({
+    id: `build-${i}-${turn.role}`,
+    role: turn.role === "user" ? "user" : "ai",
+    text: turn.content,
+  }));
+}
+
 type BrainstormChatResult = Awaited<ReturnType<typeof expoBrainstormChat>>;
 
 function brainstormFailureMessage(
@@ -186,6 +210,7 @@ export function ExpoBuildRoom({
   previewToken,
   initialReadinessState,
   initialBrainstormState,
+  initialBuildState,
   initialSupabaseConnector = null,
   initialRevenueCatConnector = null,
   initialRailwayConnector = null,
@@ -202,6 +227,7 @@ export function ExpoBuildRoom({
   previewToken: string | null;
   initialReadinessState?: ProjectReadinessState | null;
   initialBrainstormState?: ProjectBrainstormState | null;
+  initialBuildState?: ProjectBuildState | null;
   initialSupabaseConnector?: SupabaseConnectorPublic | null;
   initialRevenueCatConnector?: RevenueCatConnectorPublic | null;
   initialRailwayConnector?: RailwayConnectorPublic | null;
@@ -216,7 +242,9 @@ export function ExpoBuildRoom({
   className?: string;
 }) {
   const [plan, setPlan] = useState(initialPlan);
-  const [appModel, setAppModel] = useState<ExpoAppModel | null>(initialModel ?? null);
+  const [appModel, setAppModel] = useState<ExpoAppModel | null>(
+    initialModel ? coerceExpoAppModel(initialModel) : null
+  );
   const [phase, setPhase] = useState<Phase>(initialModel ? "done" : "summary");
   const [bubbles, setBubbles] = useState<Bubble[]>([]);
   const [busy, setBusy] = useState(false);
@@ -230,11 +258,92 @@ export function ExpoBuildRoom({
   const [brainstormState, setBrainstormState] = useState<ProjectBrainstormState>(
     () => initialBrainstormState ?? defaultBrainstormState()
   );
+  const [buildState, setBuildState] = useState<ProjectBuildState>(
+    () => initialBuildState ?? defaultBuildState()
+  );
   const [fixMode, setFixMode] = useState(false);
   const [editPick, setEditPick] = useState<EditPick>("content");
   const [fixTarget, setFixTarget] = useState<TweakTarget | null>(null);
   const [fixBusy, setFixBusy] = useState(false);
   const [fixStatus, setFixStatus] = useState<string | null>(null);
+  const previewBuildStateRef = useRef<PreviewBuildState>({ launchPhase: "main" });
+
+  const previewRef = useRef<WorkspacePreviewHandle | null>(null);
+  const [awaitingPhoneUpdate, setAwaitingPhoneUpdate] = useState(false);
+  const [phonePreviewStatus, setPhonePreviewStatus] =
+    useState<PreviewStatusUpdate | null>(null);
+
+  function kickPreviewRefresh() {
+    setAwaitingPhoneUpdate(true);
+    void fetch(`/api/projects/${projectId}/runtime`, { method: "POST" }).catch(
+      () => undefined
+    );
+  }
+
+  const phonePreviewBusy =
+    awaitingPhoneUpdate || Boolean(phonePreviewStatus?.compiling);
+
+  function handlePreviewStatus(update: PreviewStatusUpdate) {
+    setPhonePreviewStatus(update);
+    if (
+      awaitingPhoneUpdate &&
+      !update.compiling &&
+      (update.live || (update.phase === "ready" && update.hasDist))
+    ) {
+      setAwaitingPhoneUpdate(false);
+    }
+  }
+  const [tapEditMode, setTapEditMode] = useState(false);
+  const [tapTarget, setTapTarget] = useState<TapPayload | null>(null);
+  const [tapBusy, setTapBusy] = useState(false);
+  const tapSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const tapPending = useRef<TapEditValue>({});
+
+  function handleTapChange(value: TapEditValue) {
+    if (!tapTarget) return;
+    // Optimistic — apply instantly inside the real app preview.
+    previewRef.current?.applyLive({
+      id: tapTarget.id,
+      kind: tapTarget.kind,
+      ...value,
+    });
+    tapPending.current = { ...tapPending.current, ...value };
+    if (tapSaveTimer.current) clearTimeout(tapSaveTimer.current);
+    tapSaveTimer.current = setTimeout(() => {
+      const change = tapPending.current;
+      tapPending.current = {};
+      if (!Object.keys(change).length) return;
+      setTapBusy(true);
+      void expoTapEdit(
+        projectId,
+        { kind: tapTarget.kind, id: tapTarget.id, path: tapTarget.path },
+        change
+      )
+        .then((res) => {
+          if (res?.ok) setAppModel(res.model);
+        })
+        .finally(() => setTapBusy(false));
+    }, 650);
+  }
+
+  function closeTapEditor() {
+    if (tapSaveTimer.current) clearTimeout(tapSaveTimer.current);
+    const change = tapPending.current;
+    tapPending.current = {};
+    if (tapTarget && Object.keys(change).length) {
+      setTapBusy(true);
+      void expoTapEdit(
+        projectId,
+        { kind: tapTarget.kind, id: tapTarget.id, path: tapTarget.path },
+        change
+      )
+        .then((res) => {
+          if (res?.ok) setAppModel(res.model);
+        })
+        .finally(() => setTapBusy(false));
+    }
+    setTapTarget(null);
+  }
   const [budgetKey, setBudgetKey] = useState(0);
   const [readinessState, setReadinessState] = useState<ProjectReadinessState>(
     () => initialReadinessState ?? defaultReadinessState()
@@ -441,9 +550,9 @@ export function ExpoBuildRoom({
     return readinessSuggestions[0]?.id ?? null;
   }, [activeSuggestionId, readinessSuggestions, readinessState.pinnedItemId]);
 
-  const buildHandoff = useMemo(
+  const applyHandoffReady = useMemo(
     () =>
-      resolveBuildHandoff({
+      resolveBrainstormApplyHandoff({
         history: brainstormState.history,
         pendingBuild: brainstormState.pendingBuild,
         model: appModel,
@@ -614,15 +723,174 @@ export function ExpoBuildRoom({
     }
   }
 
+  async function applyFromBrainstorm(handoff: BrainstormApplyHandoff) {
+    if (busy || chatSubmittingRef.current || !appModel) return;
+
+    setChatMode("build");
+    setBusy(true);
+    chatSubmittingRef.current = true;
+    const previewState = previewStateFromTarget(
+      fixTarget,
+      previewBuildStateRef.current
+    );
+    const pendingId = `apply-${Date.now()}`;
+    const userLine = handoff.displayPrompt.trim() || "Apply to preview";
+
+    setBubbles((b) => [
+      ...b,
+      {
+        id: `tu-apply-${Date.now()}`,
+        role: "user",
+        text: userLine,
+      },
+      {
+        id: pendingId,
+        role: "ai",
+        text: "…",
+        loading: true,
+      },
+    ]);
+
+    try {
+      const res = await expoTweakChat(
+        projectId,
+        handoff.displayPrompt,
+        undefined,
+        handoff.patches?.length ? handoff.patches : undefined,
+        previewState,
+        true
+      );
+      setBudgetKey((k) => k + 1);
+      if (res?.ok) {
+        setAppModel(res.model);
+        setBuildState(res.buildState);
+        kickPreviewRefresh();
+        setBrainstormState((s) => ({ ...s, pendingBuild: null }));
+        const cleared = await clearBrainstormBuildSuggestion(projectId);
+        if (cleared?.ok) setBrainstormState(cleared.brainstormState);
+        setBubbles((b) =>
+          b.map((x) =>
+            x.id === pendingId
+              ? { ...x, text: res.reply, loading: false }
+              : x
+          )
+        );
+      } else {
+        setBubbles((b) =>
+          b.map((x) =>
+            x.id === pendingId
+              ? {
+                  ...x,
+                  text:
+                    res?.message ??
+                    "Couldn't apply — tap **Apply to app** to try again.",
+                  loading: false,
+                }
+              : x
+          )
+        );
+      }
+    } catch {
+      setBubbles((b) =>
+        b.map((x) =>
+          x.id === pendingId
+            ? { ...x, text: "Couldn't apply — try again.", loading: false }
+            : x
+        )
+      );
+    } finally {
+      setBusy(false);
+      chatSubmittingRef.current = false;
+    }
+  }
+
   function submitBrainstormMessage(msg: string) {
     const trimmed = msg.trim();
     const uploads = uploadPayload(pendingAttachments);
     const refs = attachmentRefs(pendingAttachments);
     if ((!trimmed && !uploads.length) || busy || chatSubmittingRef.current) return;
 
+    const previewState = previewStateFromTarget(
+      fixTarget,
+      previewBuildStateRef.current
+    );
+    const applyHandoff = resolveBrainstormApplyHandoff({
+      history: brainstormState.history,
+      pendingBuild: brainstormState.pendingBuild,
+      model: appModel,
+      appName: plan.appName,
+    });
+
+    if (
+      appModel &&
+      typeof editingBrainstormTurn !== "number" &&
+      shouldAutoApplyFromBrainstorm(
+        trimmed || "yes",
+        applyHandoff,
+        brainstormState.pendingBuild ?? null,
+        brainstormState.history
+      ) &&
+      applyHandoff
+    ) {
+      setTweakInput("");
+      setPendingAttachments([]);
+      setAttachError(null);
+      const confirmText = trimmed || "Yes — apply it";
+      setBubbles((b) => [
+        ...b.filter((x) => x.id !== "bchat-pending-user"),
+        {
+          id: `tu-${Date.now()}`,
+          role: "user",
+          text: confirmText,
+          brainstormChat: true,
+        },
+      ]);
+      void applyFromBrainstorm(applyHandoff);
+      return;
+    }
+
+    if (
+      appModel &&
+      typeof editingBrainstormTurn !== "number" &&
+      isBrainstormApplyConfirmation(trimmed)
+    ) {
+      setChatMode("brainstorm");
+      setTweakInput("");
+      setPendingAttachments([]);
+      setBubbles((b) => [
+        ...b.filter((x) => x.id !== "bchat-pending-user"),
+        {
+          id: `tu-${Date.now()}`,
+          role: "user",
+          text: trimmed,
+          brainstormChat: true,
+        },
+        {
+          id: `ta-${Date.now()}`,
+          role: "ai",
+          text:
+            "Nothing queued to apply yet — if I just offered a preview change, say **yes** again. Otherwise ask your question and I'll guide you: implement now or **go deeper**.",
+          brainstorm: true,
+          brainstormChat: true,
+        },
+      ]);
+      return;
+    }
+
     setChatMode("brainstorm");
-    const pinnedId = readinessState.pinnedItemId;
+    let pinnedId = readinessState.pinnedItemId;
     const editTurn = editingBrainstormTurn;
+
+    if (!pinnedId && typeof editTurn !== "number" && trimmed) {
+      const autoPin = resolveDiscussPinItem(trimmed, readinessAudit?.items ?? []);
+      if (autoPin) {
+        pinnedId = autoPin.id;
+        setReadinessState((s) => ({ ...s, pinnedItemId: autoPin.id }));
+        void patchProjectReadiness(projectId, { pinnedItemId: autoPin.id }).then((res) => {
+          if (res.ok) setReadinessState(res.state);
+        });
+      }
+    }
     setTweakInput("");
     setPendingAttachments([]);
     setAttachError(null);
@@ -723,9 +991,14 @@ export function ExpoBuildRoom({
               },
             ]);
           } else {
-            return expoBrainstormChat(projectId, trimmed, pinnedId, editTurn, uploads).then(
-              applyBrainstormResult
-            );
+            return expoBrainstormChat(
+              projectId,
+              trimmed,
+              pinnedId,
+              editTurn,
+              uploads,
+              previewState
+            ).then(applyBrainstormResult);
           }
         })
         .catch(() => applyBrainstormResult(undefined))
@@ -733,7 +1006,14 @@ export function ExpoBuildRoom({
       return;
     }
 
-    void expoBrainstormChat(projectId, trimmed, pinnedId, editTurn, uploads)
+    void expoBrainstormChat(
+      projectId,
+      trimmed,
+      pinnedId,
+      editTurn,
+      uploads,
+      previewState
+    )
       .then(applyBrainstormResult)
       .catch(() => applyBrainstormResult(undefined))
       .finally(finish);
@@ -836,9 +1116,17 @@ export function ExpoBuildRoom({
       ];
     });
 
-    void expoTweakChat(projectId, trimmed, uploads, patches)
+    const previewState = previewStateFromTarget(
+      fixTarget,
+      previewBuildStateRef.current
+    );
+    void expoTweakChat(projectId, trimmed, uploads, patches, previewState)
       .then((res) => {
-        if (res?.ok) setAppModel(res.model);
+        if (res?.ok) {
+          setAppModel(res.model);
+          setBuildState(res.buildState);
+          kickPreviewRefresh();
+        }
         setBudgetKey((k) => k + 1);
         setBubbles((b) => [
           ...b,
@@ -912,10 +1200,6 @@ export function ExpoBuildRoom({
     setEditingBuildBubbleIndex(null);
   }, [chatMode]);
 
-  useEffect(() => {
-    void fetch("/api/expo/start", { method: "POST" });
-  }, []);
-
   const initialized = useRef(false);
   useEffect(() => {
     if (initialized.current) return;
@@ -927,7 +1211,7 @@ export function ExpoBuildRoom({
         {
           id: "welcome-back",
           role: "ai",
-          text: `**${initialPlan.appName}** is ready. Use **Brainstorm** for your launch checklist — or **Build** to change the preview.`,
+          text: `**${initialPlan.appName}** is ready. The phone on the right runs your **real Expo app** (the actual React Native code, compiled for web). **Brainstorm** plans changes; **Build** edits the real project and the phone rebuilds. Use **EAS Publish** for installable iOS/Android builds.`,
         },
         {
           id: "recap",
@@ -947,6 +1231,7 @@ export function ExpoBuildRoom({
           brainstorm: true,
         },
         ...brainstormHistoryToBubbles(initialBrainstormState?.history ?? []),
+        ...buildHistoryToBubbles(initialBuildState?.history ?? []),
       ]);
       return;
     }
@@ -962,10 +1247,10 @@ export function ExpoBuildRoom({
       {
         id: "confirm-prompt",
         role: "ai",
-        text: "Look good? **Confirm** to start building, or **Edit** if you want to tweak anything first.",
+        text: "Look good? **Confirm** to generate and compile your real Expo app, or **Edit** to tweak the plan first.",
       },
     ]);
-  }, [projectId, initialPlan, initialModel, interview, initialBrainstormState]);
+  }, [projectId, initialPlan, initialModel, interview, initialBrainstormState, initialBuildState]);
 
   function clearBuildTimers() {
     buildTimers.current.forEach(clearInterval);
@@ -982,7 +1267,7 @@ export function ExpoBuildRoom({
       {
         id: "ai-go",
         role: "ai",
-        text: `On it — building **${plan.appName}** now. Watch the progress below and the phone on the right.`,
+        text: `On it — building **${plan.appName}** now: writing real Expo Router code, then compiling it so the phone on the right runs the actual app.`,
       },
     ]);
     setPhase("building");
@@ -1133,17 +1418,21 @@ export function ExpoBuildRoom({
 
   const previewReady = phase === "done" && Boolean(appModel);
 
-  const showFloatingBuild =
+  const showFloatingApply =
     phase === "done" &&
     chatMode === "brainstorm" &&
-    Boolean(buildHandoff) &&
-    !busy;
+    Boolean(appModel) &&
+    !busy &&
+    Boolean(applyHandoffReady);
 
+  const runtimeBootstrapped = useRef(false);
   useEffect(() => {
-    if (phase === "building" || previewReady) {
-      void fetch("/api/expo/start", { method: "POST" });
-    }
-  }, [phase, previewReady]);
+    if (!previewReady || runtimeBootstrapped.current) return;
+    runtimeBootstrapped.current = true;
+    void fetch(`/api/projects/${projectId}/runtime`, { method: "POST" }).catch(
+      () => undefined
+    );
+  }, [previewReady, projectId]);
 
   return (
     <div className={`flex min-h-0 w-full flex-col ${className}`}>
@@ -1358,11 +1647,11 @@ export function ExpoBuildRoom({
         {phase === "done" && (
           <div className="shrink-0 border-t border-line/25 bg-white/55 px-4 py-3 backdrop-blur-md">
             <FloatingBuildHandoff
-              visible={showFloatingBuild}
-              label={buildHandoff?.label ?? "Build"}
+              visible={showFloatingApply}
+              label={applyHandoffReady?.label ?? "Apply to app"}
               busy={busy}
               onBuild={() => {
-                if (buildHandoff) handoffToBuildAndRun(buildHandoff);
+                if (applyHandoffReady) void applyFromBrainstorm(applyHandoffReady);
               }}
             />
 
@@ -1385,21 +1674,6 @@ export function ExpoBuildRoom({
                 onPick={pickReadinessSuggestion}
                 className="mb-2"
               />
-            )}
-
-            {chatMode === "brainstorm" && pinnedItem && (
-              <div className="mb-2 flex items-center gap-1.5 rounded-full border border-coral/30 bg-coral/8 py-1 pl-2.5 pr-1 text-[10px] font-semibold text-coral-deep">
-                <Pin className="h-3 w-3 shrink-0" />
-                <span className="min-w-0 truncate">Discussing: {pinnedItem.title}</span>
-                <button
-                  type="button"
-                  onClick={clearPinnedReadiness}
-                  className="grid h-5 w-5 shrink-0 place-items-center rounded-full text-coral-deep/70 hover:bg-coral/15 hover:text-coral-deep"
-                  aria-label="Clear focus"
-                >
-                  <X className="h-3 w-3" />
-                </button>
-              </div>
             )}
 
             <form
@@ -1469,7 +1743,7 @@ export function ExpoBuildRoom({
                     ? "Edit your message…"
                     : chatMode === "brainstorm"
                       ? "What should we add next?"
-                      : "Describe a change to your app…"
+                      : "Describe a change — Build edits your Expo workspace and updates the preview…"
                 }
                 className="max-h-40 min-h-9 min-w-0 flex-1 resize-none overflow-y-auto border-0 bg-transparent px-2.5 py-2 text-sm leading-relaxed text-charcoal outline-none placeholder:text-warmgrey/80"
                 disabled={busy || voice.transcribing}
@@ -1538,119 +1812,91 @@ export function ExpoBuildRoom({
           </div>
         )}
         <div className="relative z-10 flex h-full w-full flex-col items-center justify-center gap-2 px-6 py-6">
-          {showPreview ? (
-            <div className="relative flex w-full justify-center">
-              <div className="relative shrink-0">
-                {fixTarget && appModel && phase === "done" && (
-                  <aside className="absolute right-full top-1/2 z-30 mr-3 hidden w-[min(280px,30vw)] max-w-[280px] -translate-y-1/2 lg:block">
-                    {chatMode === "brainstorm" ? (
-                      <TapToAskPanel
-                        target={fixTarget}
-                        model={appModel}
-                        plan={plan}
-                        interview={interview}
-                        busy={busy}
-                        onClose={() => setFixTarget(null)}
-                        onAsk={askAboutPreviewElement}
-                      />
-                    ) : (
-                      <PreviewFixPanel
-                        key={fixTarget.path}
-                        target={fixTarget}
-                        model={appModel}
-                        currentValue={getStringAtPath(appModel, fixTarget.path)}
-                        roleSibling={rolePickerSiblingField(appModel, fixTarget.path)}
-                        plan={plan}
-                        interview={interview}
-                        busy={fixBusy}
-                        statusMessage={fixStatus}
-                        onClose={() => setFixTarget(null)}
-                        onApply={(action: SelectionTweakAction, path?: string) => {
-                          void runSelectionTweak(path ?? fixTarget.path, action);
-                        }}
-                      />
-                    )}
-                  </aside>
-                )}
-                <PreviewEditChrome
-                  active={fixMode && phase === "done"}
-                  chatMode={chatMode}
-                  editPick={editPick}
-                  onEditPickChange={(pick) => {
-                    setEditPick(pick);
-                    setFixTarget(null);
+          <div className="relative flex flex-col items-center gap-3">
+            {previewReady && (
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setTapEditMode((m) => {
+                      if (m) closeTapEditor();
+                      return !m;
+                    });
                   }}
-                  disabled={phase !== "done"}
-                  onToggle={() => {
-                    setFixMode((m) => !m);
-                    setFixTarget(null);
-                    setEditPick("content");
-                  }}
-                  onDone={() => {
-                    setFixMode(false);
-                    setFixTarget(null);
-                    setEditPick("content");
-                  }}
-                >
-                  <ExpoLivePreview
-                    projectId={projectId}
-                    model={appModel}
-                    building={phase === "building"}
-                    buildPercent={buildPercent}
-                    startPastOnboarding
-                    alive={phase === "done"}
-                    editMode={fixMode && phase === "done"}
-                    editPick={editPick}
-                    hideEditBanner
-                    selectedTarget={fixTarget}
-                    onSelectTarget={(t) => setFixTarget(t)}
-                    showWatermark={showWatermark}
-                  />
-                  {fixTarget && appModel && phase === "done" && (
-                    <aside className="mt-3 w-full lg:hidden">
-                      {chatMode === "brainstorm" ? (
-                        <TapToAskPanel
-                          target={fixTarget}
-                          model={appModel}
-                          plan={plan}
-                          interview={interview}
-                          busy={busy}
-                          onClose={() => setFixTarget(null)}
-                          onAsk={askAboutPreviewElement}
-                        />
-                      ) : (
-                        <PreviewFixPanel
-                          key={fixTarget.path}
-                          target={fixTarget}
-                          model={appModel}
-                          currentValue={getStringAtPath(appModel, fixTarget.path)}
-                          roleSibling={rolePickerSiblingField(appModel, fixTarget.path)}
-                          plan={plan}
-                          interview={interview}
-                          busy={fixBusy}
-                          statusMessage={fixStatus}
-                          onClose={() => setFixTarget(null)}
-                          onApply={(action: SelectionTweakAction, path?: string) => {
-                            void runSelectionTweak(path ?? fixTarget.path, action);
-                          }}
-                        />
-                      )}
-                    </aside>
+                  className={cn(
+                    "inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-[11px] font-semibold transition",
+                    tapEditMode
+                      ? "border-coral bg-coral text-white"
+                      : "border-line/60 bg-white text-charcoal hover:bg-sand/50"
                   )}
-                </PreviewEditChrome>
+                >
+                  <Pencil className="h-3 w-3" />
+                  {tapEditMode ? "Editing — tap any text or color" : "Tap to edit"}
+                </button>
               </div>
-            </div>
-          ) : (
-            <div
-              className="rounded-2xl border border-dashed border-line/80 bg-cream/50 p-6 text-center"
-              style={{ width: 300, maxWidth: "min(300px, 78vw)", aspectRatio: `${70.6} / ${146.6}` }}
-            >
-              <Sparkles className="mx-auto h-8 w-8 text-coral/60" />
-              <p className="mt-2 text-xs text-warmgrey">
-                Your live preview appears here when you confirm
-              </p>
-            </div>
-          )}
+            )}
+            {phonePreviewBusy && (
+              <div
+                className="flex max-w-[300px] items-center gap-2 rounded-2xl border border-coral/25 bg-coral/[0.06] px-3.5 py-2.5 text-center shadow-sm"
+                role="status"
+                aria-live="polite"
+              >
+                <Loader2 className="h-4 w-4 shrink-0 animate-spin text-coral" />
+                <p className="text-left text-[11px] leading-snug text-charcoal">
+                  <span className="font-semibold">Phone preview updating</span>
+                  <span className="text-warmgrey">
+                    {" "}
+                    — still working in the background, not crashed. Usually a few
+                    minutes.
+                  </span>
+                </p>
+              </div>
+            )}
+            {phonePreviewStatus?.justReady && !phonePreviewBusy && (
+              <div
+                className="flex max-w-[300px] items-center gap-2 rounded-2xl border border-emerald-200 bg-emerald-50 px-3.5 py-2 text-[11px] font-medium text-emerald-800"
+                role="status"
+              >
+                <span className="h-2 w-2 shrink-0 rounded-full bg-emerald-500" />
+                Preview updated — you&apos;re live
+              </div>
+            )}
+            <ExpoWorkspacePreview
+              ref={previewRef}
+              projectId={projectId}
+              appName={plan.appName}
+              building={phase === "building"}
+              buildPercent={buildPercent}
+              showWatermark={showWatermark}
+              editMode={tapEditMode}
+              awaitingUpdate={awaitingPhoneUpdate}
+              onStatusChange={handlePreviewStatus}
+              onTap={(t) => {
+                tapPending.current = {};
+                setTapTarget(t);
+              }}
+            />
+            {tapTarget && (
+              <div className="absolute left-full top-0 z-30 ml-3 hidden lg:block">
+                <TapEditPanel
+                  target={tapTarget}
+                  busy={tapBusy}
+                  onChange={handleTapChange}
+                  onClose={closeTapEditor}
+                />
+              </div>
+            )}
+            {tapTarget && (
+              <div className="w-full lg:hidden">
+                <TapEditPanel
+                  target={tapTarget}
+                  busy={tapBusy}
+                  onChange={handleTapChange}
+                  onClose={closeTapEditor}
+                />
+              </div>
+            )}
+          </div>
         </div>
 
         <div className="w-full max-w-md px-4 pb-4 xl:hidden">

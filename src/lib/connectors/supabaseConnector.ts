@@ -2,7 +2,11 @@ import type {
   ProjectSupabaseConnector,
   SupabaseConnectorPublic,
 } from "@/lib/types";
-import { encryptConnectorSecret, decryptConnectorSecret } from "./encrypt";
+import {
+  encryptConnectorSecret,
+  decryptConnectorSecret,
+  tryDecryptConnectorSecret,
+} from "./encrypt";
 import {
   APPABLE_MESSAGING_SETUP_SQL,
   APPABLE_SUPABASE_SETUP_SQL,
@@ -104,7 +108,14 @@ export async function runMessagingSchemaSetup(
         "Reconnect Supabase in Connections so Build can create tables — or paste the SQL from the Supabase dashboard.",
     };
   }
-  const accessToken = decryptConnectorSecret(tokenEnc);
+  const accessToken = tryDecryptConnectorSecret(tokenEnc);
+  if (!accessToken) {
+    return {
+      ok: false,
+      message:
+        "Reconnect Supabase in Connections — stored access token could not be read.",
+    };
+  }
   try {
     await runSupabaseSetupSql(
       accessToken,

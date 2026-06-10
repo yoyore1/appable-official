@@ -1,7 +1,6 @@
 import { answerFor } from "@/lib/interviewHelpers";
 import {
   detectInterviewNiche,
-  ideaKeyTerms,
   isConfusingIdea,
   isVagueIdea,
   mentionsAudienceInIdea,
@@ -37,7 +36,7 @@ export const POOL_QUESTIONS: Record<PoolQuestionId, PoolQuestionDef> = {
   pool_who: {
     id: "pool_who",
     kind: "text",
-    prompt: "Who is this really for?",
+    prompt: "Who's the target audience?",
   },
   pool_core_loop: {
     id: "pool_core_loop",
@@ -146,15 +145,20 @@ export function personalizePoolPrompt(
 ): string {
   const idea = answerFor(interview, "idea");
   const niche = detectInterviewNiche(interview);
-  const terms = ideaKeyTerms(idea);
   const base = POOL_QUESTIONS[id].prompt;
 
   if (id === "pool_who") {
     if (niche === "alarm-wake") {
       return "Who needs this most — heavy snoozers, shift workers, or students who oversleep?";
     }
-    if (terms.length >= 2) {
-      return `Who'd actually use something built around ${terms[0]} and ${terms[1]}?`;
+    if (niche === "dog-pets") {
+      return "Who's the target audience — dog owners, walkers, or both?";
+    }
+    if (niche === "marketplace") {
+      return "Who's this for — people offering help nearby, people who need it, or both?";
+    }
+    if (niche === "habits" || niche === "fitness") {
+      return "Who's the target audience — people already into it, beginners, or both?";
     }
     return base;
   }
@@ -163,8 +167,11 @@ export function personalizePoolPrompt(
     if (niche === "alarm-wake") {
       return "What are 2–3 main things it does — set alarm, photo to dismiss, streaks…?";
     }
-    if (terms[0]) {
-      return `What are 2–3 main things it does around ${terms[0]}?`;
+    if (niche === "dog-pets") {
+      return "What are 2–3 main things it does — post walks, match walkers, chat…?";
+    }
+    if (niche === "habits" || niche === "fitness") {
+      return "What are 2–3 main things it does — log progress, streaks, reminders…?";
     }
     return base;
   }

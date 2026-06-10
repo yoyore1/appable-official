@@ -85,10 +85,15 @@ export interface ExpoAppFlow {
   welcomeTitle?: string;
   welcomeSubtitle?: string;
   roles?: ExpoUserRole[];
+  /** Skip role picker when true or only one role remains. */
+  singleRoleMode?: boolean;
   setupTitle?: string;
   setupSubtitle?: string;
   /** Primary CTA on the profile setup wizard. */
   setupSubmitLabel?: string;
+  /** Show ← Back on profile setup (returns to role picker). */
+  setupShowBack?: boolean;
+  setupBackLabel?: string;
   setupFields?: ExpoSetupField[];
   auth?: ExpoAuthFlow;
 }
@@ -277,6 +282,8 @@ export interface ExpoAppModel {
     settings: { label: string; icon: ExpoIconName }[];
   };
   theme: ExpoAppTheme;
+  /** Per-element tap-to-edit overrides, keyed by stable appable id. */
+  elementStyles?: Record<string, { color?: string; background?: string }>;
   capabilities: ExpoAppCapabilities;
   /** Last capability self-review (behavior + UX + UI) after build or tweak. */
   capabilityAudit?: CapabilityAuditSnapshot;

@@ -1,10 +1,11 @@
 import type { BrainstormBuildSuggestion, BrainstormTurn } from "@/lib/types";
+import { isPreviewUiTopic } from "./brainstormGuidance";
 import { compileBuildHandoff } from "./compileBuildHandoff";
 import { parseCoachReplacement, tapEditUserForCoach } from "./tapCopyHandoff";
 import type { ExpoAppModel } from "./types";
 
 const COACH_READY_RE =
-  /want to update|sign-?in subtitle|switch to build|tap build|tap \*\*build\*\*|hit build|replace it with|next step:|update the (copy|preview)/i;
+  /want to update|sign-?in subtitle|switch to build|tap build|tap \*\*build\*\*|apply to app|tap \*\*apply to app\*\*|hit build|replace it with|next step:|update the (copy|preview)/i;
 
 /** Coach proposed a concrete preview copy change — Build should run. */
 export function isCoachBuildReady(coachText: string): boolean {
@@ -22,6 +23,13 @@ export function finalizeBrainstormWorkOrder(input: {
   coachText: string;
   userMessage: string;
 }): BrainstormBuildSuggestion | null {
+  if (
+    isPreviewUiTopic(input.userMessage, input.coachText) &&
+    !/replace it with:\s*["']/i.test(input.coachText)
+  ) {
+    return null;
+  }
+
   const thread: BrainstormTurn[] = [
     ...input.history,
     { role: "user", content: input.userMessage },
@@ -42,7 +50,7 @@ export function finalizeBrainstormWorkOrder(input: {
 
   if (compiled.patches.length > 0) {
     return {
-      label: "Build",
+      label: "Apply to app",
       prompt: compiled.displayPrompt,
       patches: compiled.patches,
       intent: compiled.intent,
@@ -51,7 +59,7 @@ export function finalizeBrainstormWorkOrder(input: {
 
   if (coachReady && (hasReplacement || tapThread) && compiled.displayPrompt.trim()) {
     return {
-      label: "Build",
+      label: "Apply to app",
       prompt: compiled.displayPrompt,
       patches: compiled.patches,
       intent: compiled.intent,

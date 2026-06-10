@@ -34,6 +34,7 @@ import type {
   SdkConnectorPublic,
   SupabaseConnectorPublic,
 } from "@/lib/types";
+import { EasPublishPanel } from "@/components/EasPublishPanel";
 import { ExpoPhoneGuide } from "@/components/ExpoPhoneGuide";
 import { ReadinessChecklist } from "@/components/ReadinessChecklist";
 import type {
@@ -372,7 +373,8 @@ export function BuildSidePanel({
           onToggle={() => setPreviewOpen((v) => !v)}
         />
         {previewOpen && (
-          <div id="phone-preview-panel" className="border-b border-line/15 px-4 pb-5 pt-1">
+          <div id="phone-preview-panel" className="space-y-4 border-b border-line/15 px-4 pb-5 pt-1">
+            <EasPublishPanel projectId={projectId} previewReady={previewReady} />
             <ExpoPhoneGuide
               projectId={projectId}
               previewToken={previewToken}

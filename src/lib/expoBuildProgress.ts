@@ -47,10 +47,10 @@ export function expoBuildMicroSteps(
     { id: "copy", label: "Writing domain-specific copy from your interview…", percent: 56 },
     { id: "seed", label: "Seeding realistic sample data…", percent: 64 },
     { id: "actions", label: "Wiring primary actions on every card…", percent: 72 },
-    { id: "polish", label: "Adding profile stats & settings…", percent: 80 },
-    { id: "legal", label: "Tailoring privacy & support for this app…", percent: 86 },
-    { id: "theme", label: `Applying ${mp.vibe.toLowerCase()} style — ${mp.colors.split(/[,&]/)[0]?.trim() ?? "palette"}…`, percent: 92 },
-    { id: "preview", label: "Loading your live preview…", percent: 98 }
+    { id: "polish", label: "Adding profile stats & settings…", percent: 78 },
+    { id: "expo", label: "Writing real Expo Router app (React Native)…", percent: 84 },
+    { id: "agent", label: "Code agent wiring screens to your plan…", percent: 90 },
+    { id: "compile", label: "Compiling your real app for the live phone…", percent: 96 }
   );
 
   return steps;

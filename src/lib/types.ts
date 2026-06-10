@@ -143,6 +143,11 @@ export interface ProjectBrainstormState {
   pendingBuild?: BrainstormBuildSuggestion | null;
 }
 
+/** Persisted Build tab chat — so follow-ups like "yes" / "whatever is best" stay on topic. */
+export interface ProjectBuildState {
+  history: BrainstormTurn[];
+}
+
 export type SupabaseConnectorStatus = "connected" | "setup_failed" | "disconnected";
 
 /** Safe to show in UI — no API keys. */
@@ -248,6 +253,7 @@ export interface Project {
   readinessState?: ProjectReadinessState | null;
   /** Brainstorm chat history + summary (Build agent reads this). */
   brainstormState?: ProjectBrainstormState | null;
+  buildState?: ProjectBuildState | null;
   /** Linked Supabase project — keys stored encrypted server-side. */
   supabaseConnector?: ProjectSupabaseConnector | null;
   /** Linked RevenueCat project — keys + webhook sync to Supabase. */
