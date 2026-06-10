@@ -92,6 +92,12 @@ export interface BuildResult {
 	usage: { build: number; review: number };
 	shipPath: ShipPath;
 	codemagicYaml?: string;
+	/** Built from web expoAppModel (capabilities + verify), not generic mock shell. */
+	usedExpoModel?: boolean;
+	capabilityPass?: boolean | null;
+	shipSteps?: string[];
+	readiness?: import('./readinessTypes.js').AppReadinessAuditDto | null;
+	specVerify?: { pass: boolean; issues: string[]; checked: string[] };
 }
 
 export const APPABLE_CHANNEL = 'void-channel-appable';
@@ -134,6 +140,10 @@ export interface IAppableBuilderService {
 	readonly onHandoff: Event<HandoffPayload>;
 	/** Pending handoff from startup URL, consumed once (renderer mounts after cold start). */
 	takePendingHandoff(): Promise<HandoffPayload | null>;
+	/** Persist launch-checklist pin / decision — same as web Build room. */
+	patchReadiness(req: import('./readinessTypes.js').ReadinessPatchRequest): Promise<import('./readinessTypes.js').ReadinessPatchResult>;
+	/** Tap-to-send pills for the active interview question (Kimi + fallbacks). */
+	getInterviewChoices(stepId: import('./appableInterviewFlow.js').InterviewStepId, interview: InterviewTurn[]): Promise<{ suggestions: string[]; appablePick: string }>;
 }
 
 export const IAppableBuilderService = createDecorator<IAppableBuilderService>('appableBuilderService');

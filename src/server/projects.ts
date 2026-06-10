@@ -400,6 +400,22 @@ export type ExpoWebBuildResult = {
   passes: number;
 };
 
+/** Client recovery when a long build action times out but the server already saved the model. */
+export async function recoverExpoBuildState(
+  projectId: string
+): Promise<ExpoWebBuildResult | null> {
+  const user = await requireUser();
+  const project = await db.getProject(projectId);
+  if (!project || project.userId !== user.id || !project.expoAppModel) {
+    return null;
+  }
+  const { coerceExpoAppModel } = await import("@/lib/expoApp/coerceModel");
+  return {
+    model: coerceExpoAppModel(project.expoAppModel),
+    passes: 1,
+  };
+}
+
 /** Multi-pass Expo content build — persists ExpoAppModel on the project. */
 export async function runExpoWebBuild(
   projectId: string
@@ -421,11 +437,27 @@ export async function runExpoWebBuild(
   const budget = await assertAiBudgetAvailable(project, false);
   if (!budget.ok) throw new Error("AI_CAP_REACHED");
 
-  const { result: built } = await runWithAiBilling(
-    billingScope(project, false),
-    () => buildExpoAppModel(mp, projectId, undefined, project.interview)
-  );
+  let built: Awaited<ReturnType<typeof buildExpoAppModel>> | undefined;
+  try {
+    const run = await runWithAiBilling(billingScope(project, false), () =>
+      buildExpoAppModel(mp, projectId, undefined, project.interview ?? [])
+    );
+    built = run.result;
+  } catch (err) {
+    console.error("[expo build] model generation failed:", err);
+    throw err instanceof Error ? err : new Error("MODEL_BUILD_FAILED");
+  }
+  if (!built?.model) {
+    throw new Error("MODEL_BUILD_FAILED");
+  }
   let { model, passes } = built;
+
+  // Persist content early — scaffold/runtime can be slow; recovery reads this.
+  await db.updateProject(projectId, {
+    expoAppModel: model,
+    target: "rn",
+    status: "live",
+  });
 
   setBuildProgress(projectId, {
     stepId: "scaffold",
@@ -442,9 +474,8 @@ export async function runExpoWebBuild(
     listWorkspaceFiles,
     readWorkspaceFile,
   } = await import("@/lib/codeAgent/workspace");
-  const { runInitialCodegen } = await import("@/lib/codeAgent/initialCodegen");
   const { coerceExpoAppModel } = await import("@/lib/expoApp/coerceModel");
-  const { ensureRepoForApp, commitAppState } = await import("@/lib/github");
+  const { ensureRepoForApp } = await import("@/lib/github");
 
   await ensureProjectWorkspace({
     projectId,
@@ -456,32 +487,6 @@ export async function runExpoWebBuild(
   });
   await assertWorkspaceScaffolded(projectId);
 
-  const canRunInitialAgent =
-    integrations.codeAgent &&
-    (integrations.expoBuildModel || integrations.planModel);
-
-  if (canRunInitialAgent) {
-    setBuildProgress(projectId, {
-      stepId: "codegen",
-      label: `Code agent finishing ${mp.appName} (React Native screens)…`,
-      index: 7,
-      total: 9,
-      percent: 82,
-    });
-    await runWithAiBilling(billingScope(project, false), () =>
-      runInitialCodegen({ projectId, model, mp })
-    );
-    model = coerceExpoAppModel((await loadModelFromWorkspace(projectId)) ?? model);
-  } else {
-    setBuildProgress(projectId, {
-      stepId: "codegen",
-      label: `Expo app scaffold ready — add FIREWORKS_API_KEY for agent polish…`,
-      index: 7,
-      total: 9,
-      percent: 82,
-    });
-  }
-
   model = coerceExpoAppModel(model);
 
   const repoUrl = await ensureRepoForApp({
@@ -490,25 +495,8 @@ export async function runExpoWebBuild(
     githubRepoUrl: project.githubRepoUrl ?? null,
   });
 
-  if (repoUrl && integrations.github) {
-    try {
-      const files = await listWorkspaceFiles(projectId);
-      const payload: { path: string; contents: string }[] = [];
-      for (const rel of files) {
-        payload.push({
-          path: rel,
-          contents: await readWorkspaceFile(projectId, rel),
-        });
-      }
-      if (payload.length) {
-        await commitAppState(repoUrl, payload, `Initial build: ${mp.appName}`);
-      }
-    } catch {
-      /* github optional */
-    }
-  }
-
   const { mintExpoPreviewToken } = await import("@/lib/expoPreviewToken");
+  // Save immediately so a slow code-agent pass cannot lose the whole build.
   await db.updateProject(projectId, {
     expoAppModel: model,
     expoPreviewToken: mintExpoPreviewToken(),
@@ -525,9 +513,6 @@ export async function runExpoWebBuild(
     percent: 92,
   });
 
-  // Self-healing: repair package.json → npm install → web compile → Metro.
-  // Best-effort: the app + model are already saved, so a slow/failed first
-  // compile must not throw away the build. The preview polls until ready.
   const { bootstrapWorkspaceRuntime } = await import(
     "@/lib/codeAgent/workspaceRuntime"
   );
@@ -537,9 +522,111 @@ export async function runExpoWebBuild(
     console.error("[expo build] runtime bootstrap failed:", err);
   }
 
+  const canRunInitialAgent =
+    integrations.codeAgent &&
+    (integrations.expoBuildModel || integrations.planModel);
+
+  void finishExpoBuildInBackground({
+    projectId,
+    model,
+    mp,
+    project,
+    userId: user.id,
+    repoUrl: repoUrl ?? project.githubRepoUrl ?? null,
+    canRunInitialAgent,
+    loadModelFromWorkspace,
+    listWorkspaceFiles,
+    readWorkspaceFile,
+  });
+
   revalidatePath(`/project/${projectId}`);
-  setTimeout(() => clearBuildProgress(projectId), 60_000);
   return { model, passes };
+}
+
+/** Code agent polish + GitHub commit — runs after the build action returns. */
+async function finishExpoBuildInBackground(input: {
+  projectId: string;
+  model: ExpoAppModel;
+  mp: MasterBuildPrompt;
+  project: Awaited<ReturnType<typeof db.getProject>>;
+  userId: string;
+  repoUrl: string | null;
+  canRunInitialAgent: boolean;
+  loadModelFromWorkspace: (id: string) => Promise<ExpoAppModel | null>;
+  listWorkspaceFiles: (id: string) => Promise<string[]>;
+  readWorkspaceFile: (id: string, rel: string) => Promise<string>;
+}): Promise<void> {
+  const { coerceExpoAppModel } = await import("@/lib/expoApp/coerceModel");
+  let model = input.model;
+
+  try {
+    if (input.canRunInitialAgent) {
+      setBuildProgress(input.projectId, {
+        stepId: "codegen",
+        label: `Code agent finishing ${input.mp.appName} (React Native screens)…`,
+        index: 7,
+        total: 9,
+        percent: 82,
+      });
+      const { runInitialCodegen } = await import("@/lib/codeAgent/initialCodegen");
+      await runWithAiBilling(billingScope(input.project!, false), () =>
+        runInitialCodegen({ projectId: input.projectId, model, mp: input.mp })
+      );
+      model = coerceExpoAppModel(
+        (await input.loadModelFromWorkspace(input.projectId)) ?? model
+      );
+      await db.updateProject(input.projectId, { expoAppModel: model });
+    } else {
+      setBuildProgress(input.projectId, {
+        stepId: "codegen",
+        label: `Expo app scaffold ready — add FIREWORKS_API_KEY for agent polish…`,
+        index: 7,
+        total: 9,
+        percent: 82,
+      });
+    }
+
+    if (input.repoUrl && integrations.github) {
+      const { commitAppState } = await import("@/lib/github");
+      try {
+        const files = await input.listWorkspaceFiles(input.projectId);
+        const payload: { path: string; contents: string }[] = [];
+        for (const rel of files) {
+          payload.push({
+            path: rel,
+            contents: await input.readWorkspaceFile(input.projectId, rel),
+          });
+        }
+        if (payload.length) {
+          await commitAppState(
+            input.repoUrl,
+            payload,
+            `Initial build: ${input.mp.appName}`
+          );
+        }
+      } catch {
+        /* github optional */
+      }
+    }
+
+    const { bootstrapWorkspaceRuntime } = await import(
+      "@/lib/codeAgent/workspaceRuntime"
+    );
+    bootstrapWorkspaceRuntime(input.projectId);
+    revalidatePath(`/project/${input.projectId}`);
+  } catch (err) {
+    console.error("[expo build] background finish failed:", err);
+  } finally {
+    setBuildProgress(input.projectId, {
+      stepId: "preview",
+      label: "Your preview is ready →",
+      index: 8,
+      total: 9,
+      percent: 100,
+      done: true,
+    });
+    setTimeout(() => clearBuildProgress(input.projectId), 60_000);
+  }
 }
 
 /** Post-build brainstorm — Qwen coach, Kimi on deep threads; no preview changes from chat itself. */

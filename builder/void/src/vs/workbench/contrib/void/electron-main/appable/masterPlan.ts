@@ -2,8 +2,9 @@
  *  Master build prompt synthesis — mirrors web generateMasterPrompt (deterministic).
  *--------------------------------------------------------------------------------------*/
 
-import { InterviewAnswers, MasterBuildPrompt, Vibe } from '../../common/appableBuilderTypes.js';
-import { inferVibe, resolveAppName, resolveColors } from '../../common/appableInterview.js';
+import { InterviewAnswers, MasterBuildPrompt } from '../../common/appableBuilderTypes.js';
+import { interviewTurnsFromAnswers } from '../../common/appableInterview.js';
+import { inferVibe, resolveAppName, resolveColors } from '../../common/appableInterviewHelpers.js';
 
 type LayoutArchetype =
 	| 'tracker-dashboard'
@@ -144,12 +145,13 @@ function inferArchetype(idea: string, featuresRaw: string, audience: string) {
 }
 
 export function buildMasterPromptFromInterview(answers: InterviewAnswers): MasterBuildPrompt {
+	const turns = interviewTurnsFromAnswers(answers);
 	const idea = answers.idea.trim();
 	const audience = answers.audience.trim() || 'Everyday people who want something simple and beautiful.';
 	const featuresRaw = answers.features.trim();
-	const appName = resolveAppName(answers);
-	const vibe: Vibe = inferVibe(answers);
-	const colors = resolveColors(answers.colors, answers);
+	const appName = resolveAppName(turns);
+	const vibe = inferVibe(turns);
+	const colors = resolveColors(answers.colors, turns);
 	const inferred = inferArchetype(idea, featuresRaw, audience);
 
 	return {

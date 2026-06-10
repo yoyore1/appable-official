@@ -19,6 +19,11 @@ function appId(name: string): string {
 	const base = pascal(name);
 	return /^[A-Za-z]/.test(base) ? base : 'App' + base;
 }
+/** PascalCase target name — matches project.yml / Xcode scheme. */
+export function xcodeProjectName(name: string): string {
+	return appId(name);
+}
+
 export function bundleIdFor(name: string): string {
 	const slug = name.toLowerCase().replace(/[^a-z0-9]/g, '');
 	return `com.appable.${slug || 'app'}`;

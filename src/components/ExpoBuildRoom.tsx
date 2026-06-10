@@ -85,9 +85,11 @@ import {
   expoTweakChat,
   patchProjectReadiness,
   prepareExpoBuild,
+  recoverExpoBuildState,
   runExpoWebBuild,
   updateExpoPlan,
 } from "@/server/projects";
+import type { ExpoWebBuildResult } from "@/server/projects";
 import { TapEditPanel, type TapEditValue } from "@/components/TapEditPanel";
 import type {
   PreviewStatusUpdate,
@@ -1313,8 +1315,7 @@ export function ExpoBuildRoom({
     }, 280);
     buildTimers.current.push(smooth);
 
-    try {
-      const result = await runExpoWebBuild(projectId);
+    const finishBuildUi = (result: ExpoWebBuildResult) => {
       clearBuildTimers();
       serverPercentRef.current = 100;
       setBuildPercent(100);
@@ -1344,15 +1345,37 @@ export function ExpoBuildRoom({
       ]);
       setPhase("done");
       setBudgetKey((k) => k + 1);
+    };
+
+    try {
+      let result: ExpoWebBuildResult | null | undefined = await runExpoWebBuild(projectId);
+      if (!result?.model) {
+        result = await recoverExpoBuildState(projectId);
+      }
+      if (!result?.model) {
+        throw new Error("BUILD_INCOMPLETE");
+      }
+      finishBuildUi(result);
     } catch (err) {
       clearBuildTimers();
+      const recovered = await recoverExpoBuildState(projectId).catch(() => null);
+      if (recovered?.model) {
+        finishBuildUi(recovered);
+        return;
+      }
       const detail = err instanceof Error ? err.message : String(err);
       const friendly =
         detail === "AI_CAP_REACHED"
           ? "You've hit the AI usage cap — top up to keep building."
           : detail === "NO_PROMPT"
             ? "Finish the interview first, then Confirm to build."
-            : `Hit a snag building: ${detail}. Try Confirm again in a sec.`;
+            : detail === "MODEL_BUILD_FAILED" || detail === "CAPABILITY_REVIEW_FAILED"
+              ? "Couldn't generate your app content — check AI keys on Railway, then Confirm again."
+              : detail.includes("reading 'model'")
+                ? "Build finished on the server but the response got lost — hit Confirm again; if the preview is loading, give it a minute first."
+                : detail === "BUILD_INCOMPLETE"
+                ? "Build took too long to respond — if the preview on the right is loading, wait a minute; otherwise hit Confirm again."
+                : `Hit a snag building: ${detail}. Try Confirm again in a sec.`;
       console.error("[expo build] failed:", err);
       setBubbles((b) => [...b, { id: "err", role: "ai", text: friendly }]);
       setPhase("summary");

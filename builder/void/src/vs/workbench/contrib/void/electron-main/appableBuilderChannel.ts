@@ -8,7 +8,10 @@ import { IServerChannel } from '../../../../base/parts/ipc/common/ipc.js';
 import { Emitter, Event } from '../../../../base/common/event.js';
 import { URI } from '../../../../base/common/uri.js';
 import { BuildOptions, ChatRequest, HandoffPayload, InterviewAnswers, ProgressEvent } from '../common/appableBuilderTypes.js';
-import { buildApp, chatWithAgent, fetchPlanForProject, generatePlanFromInterview, primeAppableEnv, syncInterviewProject } from './appable/engine.js';
+import type { ReadinessPatchRequest } from '../common/readinessTypes.js';
+import { buildApp, chatWithAgent, fetchPlanForProject, generatePlanFromInterview, getInterviewChoices, patchProjectReadiness, primeAppableEnv, syncInterviewProject } from './appable/engine.js';
+import type { InterviewStepId } from '../common/appableInterviewFlow.js';
+import type { InterviewTurn } from '../common/appableBuilderTypes.js';
 import { exchangeHandoffToken, parseHandoffUri } from './appable/handoff.js';
 
 export class AppableBuilderChannel implements IServerChannel {
@@ -61,6 +64,13 @@ export class AppableBuilderChannel implements IServerChannel {
 				const p = this._pendingHandoff;
 				this._pendingHandoff = null;
 				return p;
+			}
+			case 'patchReadiness': {
+				return patchProjectReadiness(params as ReadinessPatchRequest);
+			}
+			case 'getInterviewChoices': {
+				const { stepId, interview } = params as { stepId: InterviewStepId; interview: InterviewTurn[] };
+				return getInterviewChoices(stepId, interview);
 			}
 			default: throw new Error(`[AppableBuilderChannel] unknown command: ${command}`);
 		}

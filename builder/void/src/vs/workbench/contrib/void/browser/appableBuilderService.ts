@@ -10,8 +10,10 @@ import { IMainProcessService } from '../../../../platform/ipc/common/mainProcess
 import { registerSingleton, InstantiationType } from '../../../../platform/instantiation/common/extensions.js';
 import {
 	APPABLE_CHANNEL, BuildOptions, BuildResult, ChatRequest, ChatResponse, HandoffPayload, IAppableBuilderService,
-	InterviewAnswers, MasterBuildPrompt, ProgressEvent,
+	InterviewAnswers, InterviewTurn, MasterBuildPrompt, ProgressEvent,
 } from '../common/appableBuilderTypes.js';
+import type { ReadinessPatchRequest, ReadinessPatchResult } from '../common/readinessTypes.js';
+import type { InterviewStepId } from '../common/appableInterviewFlow.js';
 
 class AppableBuilderService extends Disposable implements IAppableBuilderService {
 	_serviceBrand: undefined;
@@ -61,6 +63,14 @@ class AppableBuilderService extends Disposable implements IAppableBuilderService
 
 	takePendingHandoff(): Promise<HandoffPayload | null> {
 		return this.channel.call<HandoffPayload | null>('takePendingHandoff');
+	}
+
+	patchReadiness(req: ReadinessPatchRequest): Promise<ReadinessPatchResult> {
+		return this.channel.call<ReadinessPatchResult>('patchReadiness', req);
+	}
+
+	getInterviewChoices(stepId: InterviewStepId, interview: InterviewTurn[]): Promise<{ suggestions: string[]; appablePick: string }> {
+		return this.channel.call('getInterviewChoices', { stepId, interview });
 	}
 }
 

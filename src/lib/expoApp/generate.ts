@@ -102,29 +102,38 @@ async function callPlanModel(
     return { text: "", costUsd: 0 };
   }
   const url = `${planModel.baseUrl.replace(/\/$/, "")}/chat/completions`;
-  const res = await fetch(url, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${planModel.key}`,
-    },
-    body: JSON.stringify({
-      model: planModel.name,
-      temperature: 0.35,
-      max_tokens: 8000,
-      ...(json ? { response_format: { type: "json_object" } } : {}),
-      messages: [
-        { role: "system", content: system },
-        { role: "user", content: user },
-      ],
-    }),
-  });
-  if (!res.ok) return { text: "", costUsd: 0 };
-  const data = await res.json();
-  const costUsd = parseDeepInfraCost(data);
-  trackLlmCost(costUsd);
-  const text = (data?.choices?.[0]?.message?.content ?? "").trim();
-  return { text, costUsd };
+  try {
+    const res = await fetch(url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${planModel.key}`,
+      },
+      body: JSON.stringify({
+        model: planModel.name,
+        temperature: 0.35,
+        max_tokens: 8000,
+        ...(json ? { response_format: { type: "json_object" } } : {}),
+        messages: [
+          { role: "system", content: system },
+          { role: "user", content: user },
+        ],
+      }),
+    });
+    if (!res.ok) {
+      const errBody = await res.text().catch(() => "");
+      console.warn("[expoApp] plan model HTTP", res.status, errBody.slice(0, 200));
+      return { text: "", costUsd: 0 };
+    }
+    const data = await res.json();
+    const costUsd = parseDeepInfraCost(data);
+    trackLlmCost(costUsd);
+    const text = (data?.choices?.[0]?.message?.content ?? "").trim();
+    return { text, costUsd };
+  } catch (err) {
+    console.warn("[expoApp] plan model request failed:", err);
+    return { text: "", costUsd: 0 };
+  }
 }
 
 function buildGenerateSystem(interviewCtx: ReturnType<typeof buildInterviewContext>): string {
@@ -482,6 +491,9 @@ export async function buildExpoAppModel(
   let model = finalize(input, mp, interview);
   tick(6, "Checking every feature is complete…");
   const reviewed = runCapabilityReview(model, mp, interview);
+  if (!reviewed?.model) {
+    throw new Error("CAPABILITY_REVIEW_FAILED");
+  }
   model = reviewed.model;
   tick(7);
 

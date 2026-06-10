@@ -16,9 +16,14 @@ import {
 	BuildMode, BuildOptions, BuildResult, ChatRequest, ChatResponse, InterviewAnswers,
 	MasterBuildPrompt, ProgressEvent, ShipPath, Vibe,
 } from '../../common/appableBuilderTypes.js';
-import { INTERVIEW_QUESTIONS } from '../../common/appableInterview.js';
+import { APPABLE_PICK, FULL_STEPS, INTERVIEW_QUESTIONS, getInterviewStepChoices } from '../../common/appableInterview.js';
+import type { InterviewStepId } from '../../common/appableInterviewFlow.js';
 import { buildMasterPromptFromInterview } from './masterPlan.js';
-import { GeneratedFile, bundleIdFor, generateSwiftUIProject } from './swiftgen.js';
+import type { ExpoAppModel, ProjectBuildSpec } from '../../common/expoAppModelTypes.js';
+import { GeneratedFile, bundleIdFor, generateSwiftUIProject, xcodeProjectName } from './swiftgen.js';
+import { generateSwiftFromExpoModel } from './swiftFromExpoModel.js';
+import { verifySwiftAgainstModel } from './swiftSpecVerify.js';
+import type { AppReadinessAuditDto, ReadinessPatchRequest, ReadinessPatchResult } from '../../common/readinessTypes.js';
 import { SWIFT_DESIGN_RULES } from './swiftDesignPrompt.js';
 import { loadAppableEnv } from './loadEnv.js';
 
@@ -136,6 +141,49 @@ async function fetchMasterPrompt(projectId: string): Promise<{ userId: string; m
 	return papi('/api/projects/' + projectId + '/master-prompt', { method: 'GET' });
 }
 
+async function fetchBuildSpec(projectId: string): Promise<ProjectBuildSpec | null> {
+	if (!has().platform || projectId === 'sample') { return null; }
+	try {
+		return await papi<ProjectBuildSpec>(`/api/projects/${projectId}/build-spec`, { method: 'GET' });
+	} catch {
+		return null;
+	}
+}
+
+export async function patchProjectReadiness(req: ReadinessPatchRequest): Promise<ReadinessPatchResult> {
+	loadAppableEnv();
+	if (!has().platform || req.projectId === 'sample') {
+		return { ok: false, readiness: null };
+	}
+	try {
+		const res = await papi<{ ok: boolean; readiness: AppReadinessAuditDto | null }>(
+			`/api/projects/${req.projectId}/readiness`,
+			{
+				method: 'PATCH',
+				body: JSON.stringify({
+					pinnedItemId: req.pinnedItemId,
+					itemId: req.itemId,
+					discussed: req.discussed,
+					decision: req.decision,
+				}),
+			}
+		);
+		return { ok: res.ok, readiness: res.readiness ?? null };
+	} catch {
+		return { ok: false, readiness: null };
+	}
+}
+
+async function ensureExpoModel(projectId: string): Promise<ExpoAppModel | null> {
+	if (!has().platform || projectId === 'sample') { return null; }
+	try {
+		const res = await papi<{ model: ExpoAppModel }>(`/api/projects/${projectId}/ensure-expo-model`, { method: 'POST', body: '{}' });
+		return res.model ?? null;
+	} catch {
+		return null;
+	}
+}
+
 /** Pull a saved plan from the platform — used when the user pastes a project ID. */
 export async function fetchPlanForProject(projectId: string): Promise<MasterBuildPrompt> {
 	loadAppableEnv();
@@ -163,7 +211,16 @@ async function postCache(userId: string, category: string, mp: MasterBuildPrompt
 // ---- model (Kimi or deterministic) -----------------------------------------
 function estimateTokens(s: string): number { return Math.ceil(s.length / 4); }
 
-async function generateProject(mp: MasterBuildPrompt, mode: BuildMode, refs: SimilarBuild[], projectId?: string): Promise<GeneratedFile[]> {
+async function generateProject(
+	mp: MasterBuildPrompt,
+	mode: BuildMode,
+	refs: SimilarBuild[],
+	projectId?: string,
+	expoModel?: ExpoAppModel | null
+): Promise<GeneratedFile[]> {
+	if (expoModel) {
+		return generateSwiftFromExpoModel(mp, expoModel, mode, projectId);
+	}
 	if (!has().buildModel) { return generateSwiftUIProject(mp, mode, projectId); }
 	const refCtx = refs.length ? '\nReference structures (adapt, don\'t copy):\n' + refs.map((r) => `- ${r.category}/${r.vibe}: ${r.features.join(', ')}`).join('\n') : '';
 	const system = 'You are an expert iOS engineer. Generate a complete native SwiftUI app as an XcodeGen project. Respond with STRICT JSON { "files": [ { "path", "contents" } ] }. Include project.yml, Resources/Info.plist, an @main App, themed SwiftUI views per screen, mock data. ' +
@@ -220,6 +277,46 @@ export async function chatWithAgent(req: ChatRequest): Promise<ChatResponse> {
 			'Once your key is set I\'ll give tailored advice. For now: keep your app to 3 core screens and one clear action each.',
 		model: 'offline',
 	};
+}
+
+export interface InterviewChoicesResult {
+	suggestions: string[];
+	appablePick: string;
+}
+
+/** Suggestion pills for active interview step — Kimi when available, else tailored fallbacks. */
+export async function getInterviewChoices(
+	stepId: InterviewStepId,
+	interview: InterviewTurn[]
+): Promise<InterviewChoicesResult> {
+	loadAppableEnv();
+	const fallback = getInterviewStepChoices(stepId, interview);
+	const step = FULL_STEPS.find((s) => s.id === stepId);
+	if (!has().buildModel || !step) {
+		return fallback;
+	}
+	const system =
+		'You generate tap-to-send suggestion pills for an iOS app interview. ' +
+		'Return STRICT JSON: { "pills": string[3] }. Each pill max 8 words, specific to THIS app idea from interview context. ' +
+		'No arrows, no feature lists, no meta commentary. For name step: short app names only.';
+	const user = JSON.stringify({ stepId, prompt: step.prompt, interview });
+	const raw = await callKimi(
+		[{ role: 'system', content: system }, { role: 'user', content: user }],
+		{ json: true, maxTokens: 400 }
+	);
+	if (raw) {
+		try {
+			const parsed = JSON.parse(raw) as { pills?: string[] };
+			const pills = (parsed.pills ?? []).map((p) => String(p).trim()).filter((p) => p.length > 2 && p.length < 72);
+			if (pills.length >= 2) {
+				return {
+					suggestions: [...pills.slice(0, 3), APPABLE_PICK],
+					appablePick: fallback.appablePick,
+				};
+			}
+		} catch { /* fall through */ }
+	}
+	return fallback;
 }
 
 export async function generatePlanFromInterview(answers: InterviewAnswers): Promise<MasterBuildPrompt> {
@@ -406,19 +503,65 @@ export async function buildApp(opts: BuildOptions, emit: Emit): Promise<BuildRes
 
 	prog(emit, 'step', 'Getting your app plan…', 14);
 	let mp: MasterBuildPrompt; let userId: string;
+	let expoModel: ExpoAppModel | null = null;
+	let readinessAudit: AppReadinessAuditDto | null = null;
+	let usedExpoModel = false;
+	let specVerify: { pass: boolean; issues: string[]; checked: string[] } | undefined;
+
+	const pid = opts.projectId !== 'sample' ? opts.projectId : undefined;
+	const spec = pid ? await fetchBuildSpec(pid) : null;
+
 	if (opts.masterPrompt) {
-		mp = opts.masterPrompt; userId = user.userId;
+		mp = opts.masterPrompt;
+		userId = spec?.userId ?? user.userId;
 		emit({ kind: 'detail', message: 'using plan from in-Builder interview' });
+	} else if (spec?.masterPrompt) {
+		mp = spec.masterPrompt;
+		userId = spec.userId;
 	} else {
 		const fetched = await fetchMasterPrompt(opts.projectId);
-		mp = fetched.masterPrompt; userId = fetched.userId;
+		mp = fetched.masterPrompt;
+		userId = fetched.userId;
 	}
+
+	expoModel = spec?.expoAppModel ?? null;
+	readinessAudit = spec?.readiness ?? null;
+
+	if (!expoModel && pid && has().platform) {
+		prog(emit, 'step', 'Running Appable product spec (capabilities + verify)…', 16);
+		emit({ kind: 'detail', message: 'ensure-expo-model — same pipeline as web Confirm' });
+		expoModel = await ensureExpoModel(pid);
+		if (expoModel) {
+			prog(emit, 'ok', 'Product spec ready — wiring real screens & actions', 20);
+			const spec2 = await fetchBuildSpec(pid);
+			if (spec2?.readiness) { readinessAudit = spec2.readiness; }
+		}
+	}
+
+	if (expoModel) {
+		usedExpoModel = true;
+		const pass = expoModel.capabilityAudit?.pass;
+		if (pass === true) {
+			prog(emit, 'ok', 'Capability review passed — building from verified spec', 22);
+		} else if (pass === false) {
+			prog(emit, 'step', 'Building from spec (some launch items still partial on web)', 22);
+		}
+		if (readinessAudit) {
+			const blockers = readinessAudit.launchBlockers.length;
+			if (blockers > 0) {
+				prog(emit, 'step', `Launch checklist: ${blockers} blocker(s) — full list after build`, 23);
+			} else {
+				emit({ kind: 'detail', message: `readiness: ${readinessAudit.haveCount} ready · ${readinessAudit.discussedCount ?? 0} discussed` });
+			}
+		}
+	}
+
 	prog(emit, 'ok', `Building “${mp.appName}” — ${mp.vibe.toLowerCase()}, for ${mp.audience}`, 18);
 
-	const category = (mp.features[0] ?? 'app').toLowerCase().split(' ')[0];
+	const category = (expoModel?.category ?? mp.features[0] ?? 'app').toLowerCase().split(' ')[0];
 	const refs = await findSimilar(category, mp.features, mp.vibe, userId);
 	if (refs.length) { emit({ kind: 'detail', message: `injected ${refs.length} reference build(s) from cache` }); }
-	prog(emit, 'step', 'Designing your onboarding ✨', 24);
+	prog(emit, 'step', usedExpoModel ? 'Translating your web spec into SwiftUI…' : 'Designing your onboarding ✨', 24);
 
 	// Codegen is the long pole — tick progress so the UI keeps moving.
 	let genPct = 26;
@@ -428,10 +571,24 @@ export async function buildApp(opts: BuildOptions, emit: Emit): Promise<BuildRes
 	}, 1100);
 	let files: GeneratedFile[];
 	try {
-		files = await generateProject(mp, opts.mode, refs, opts.projectId !== 'sample' ? opts.projectId : undefined);
+		files = await generateProject(mp, opts.mode, refs, pid, expoModel);
 	} finally {
 		clearInterval(genTick);
 	}
+
+	if (expoModel && usedExpoModel) {
+		prog(emit, 'step', 'Verifying Swift matches your product spec…', 52);
+		specVerify = verifySwiftAgainstModel(files, expoModel);
+		if (specVerify.pass) {
+			prog(emit, 'ok', `Spec verify passed (${specVerify.checked.length} checks)`, 54);
+		} else {
+			for (const issue of specVerify.issues.slice(0, 4)) {
+				emit({ kind: 'detail', message: `spec verify: ${issue}` });
+			}
+			prog(emit, 'fixing', `Spec verify: ${specVerify.issues.length} gap(s) — built anyway`, 54);
+		}
+	}
+
 	prog(emit, 'step', 'Tailoring privacy & support for this app…', 50);
 	prog(emit, 'step', 'Setting up your screens', 52);
 	prog(emit, 'step', 'Making it beautiful…', 58);
@@ -458,12 +615,14 @@ export async function buildApp(opts: BuildOptions, emit: Emit): Promise<BuildRes
 		? (rounds === 0 ? 'Everything compiled first try.' : `All sorted after ${rounds} fix round(s).`)
 		: 'This one\'s being stubborn — saved everything; you can retry or get help.', 88);
 
+	const shipSteps = osi.ship === 'windows' ? codemagicGuide(mp) : ['Open the project folder in Xcode', 'Run on simulator or your device'];
+
 	let yaml: string | undefined;
 	if (osi.ship === 'windows') {
-		yaml = codemagicYaml(mp, folder);
+		yaml = codemagicYaml(mp, xcodeProjectName(mp.appName));
 		await writeOne(projectDir, { path: 'codemagic.yaml', contents: yaml });
 		emit({ kind: 'heading', message: 'Get it on your iPhone (Windows → Codemagic)' });
-		codemagicGuide(mp).forEach((line) => emit({ kind: 'step', message: line }));
+		shipSteps.forEach((line) => emit({ kind: 'step', message: line }));
 	} else {
 		emit({ kind: 'heading', message: 'Run it on your Mac' });
 		emit({ kind: 'step', message: 'Tap “Open in Xcode” or “Run” — I\'ll launch the simulator for you.' });
@@ -484,5 +643,10 @@ export async function buildApp(opts: BuildOptions, emit: Emit): Promise<BuildRes
 		appName: mp.appName, bundleId: bundleIdFor(mp.appName), mode: opts.mode, projectDir,
 		fileCount: files.length, rounds, compiled, usage: { build: buildPower, review: reviewPower },
 		shipPath: osi.ship, codemagicYaml: yaml,
+		usedExpoModel,
+		capabilityPass: expoModel?.capabilityAudit?.pass ?? null,
+		readiness: readinessAudit,
+		specVerify,
+		shipSteps,
 	};
 }
