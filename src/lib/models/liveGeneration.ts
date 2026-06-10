@@ -199,7 +199,7 @@ export async function runLiveGeneration(
   input: LiveGenerationInput = {}
 ): Promise<LiveGenerationResult> {
   const gate = checkLiveGenerationBudget(user, capability, input);
-  if (!("task" in gate)) return gate;
+  if (!("complexity" in gate)) return gate;
 
   try {
     const result = await dispatchTask(gate.task, capability, input, gate.complexity);

@@ -119,9 +119,9 @@ export function inferInsightsProfile(
   mp: MasterBuildPrompt,
   model?: ExpoAppModel | null
 ): InsightsAppProfile {
-  const spec = inferProductSpec(mp, model ?? undefined);
+  const spec = inferProductSpec(mp);
   const blob = `${mp.description} ${mp.features.join(" ")} ${mp.audience}`.toLowerCase();
-  if (spec.shape === "local_marketplace" || /marketplace|two.?sided|owner|walker|buyer|seller/.test(blob)) {
+  if (spec.hasDualRoles || /marketplace|two.?sided|owner|walker|buyer|seller/.test(blob)) {
     return "marketplace";
   }
   if (/subscribe|subscription|premium|paywall/.test(blob)) return "subscription";

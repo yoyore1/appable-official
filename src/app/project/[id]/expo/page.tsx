@@ -24,14 +24,13 @@ export default async function ExpoBuildPage({
   let project = await db.getProject(params.id);
   if (!project || project.userId !== user.id) redirect("/dashboard");
   if (!user.depositPaid) redirect(`/deposit?project=${project.id}`);
-  if (!project.masterPrompt) redirect(`/project/${project.id}/build`);
-
   if (project.expoAppModel && !project.expoPreviewToken) {
     await db.updateProject(project.id, { expoPreviewToken: mintExpoPreviewToken() });
     project = (await db.getProject(params.id))!;
   }
 
   const mp = project.masterPrompt;
+  if (!mp) redirect(`/project/${project.id}/build`);
   const built = isExpoAppBuilt(project);
 
   return (

@@ -17,7 +17,8 @@ export async function pullSupabaseInsight(
     let url: string;
     let serviceRoleKey: string;
     try {
-      ({ url, serviceRoleKey } = decryptSupabaseConnectorSecrets(connector));
+      url = connector.public.url;
+      ({ serviceRoleKey } = decryptSupabaseConnectorSecrets(connector));
     } catch {
       return {
         ...base,

@@ -364,13 +364,16 @@ export function inferBuildTaskFromContext(
 function stubModelForCopyExtract(model?: ExpoAppModel | null): ExpoAppModel {
   if (model) return model;
   return {
+    version: 1,
+    category: "general",
+    capabilities: { enabled: [], heroAction: "", heroSublabel: "", visionPrompt: "" },
     flow: {
       roles: [
         { id: "owner", label: "Dog owner", description: "" },
         { id: "walker", label: "Dog walker", description: "" },
       ],
     },
-    profile: { displayName: "App", tagline: "" },
+    profile: { displayName: "App", tagline: "", stats: [], settings: [] },
     home: { headline: "", subheadline: "", heroLabel: "", heroSublabel: "", sections: [] },
     onboarding: [],
     tabs: [],
@@ -382,8 +385,12 @@ function stubModelForCopyExtract(model?: ExpoAppModel | null): ExpoAppModel {
       charcoal: "#000",
       muted: "#666",
       line: "#ccc",
+      radius: 16,
+      vibe: "Soft",
+      fontDisplay: "Fraunces",
+      fontBody: "DM Sans",
     },
-  } as ExpoAppModel;
+  } satisfies ExpoAppModel;
 }
 
 function formatCopyChangesAsBuildPrompt(changes: CopyChange[]): string {

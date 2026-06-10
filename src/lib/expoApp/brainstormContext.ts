@@ -56,16 +56,16 @@ export function appendBrainstormTurn(
   assistantReply: string,
   opts?: { displayText?: string; attachments?: ChatAttachmentRef[] }
 ): ProjectBrainstormState {
-  const next: BrainstormTurn[] = [
+  const next = [
     ...state.history,
     {
-      role: "user",
+      role: "user" as const,
       content: userMessage,
       displayText: opts?.displayText,
       attachments: opts?.attachments,
     },
-    { role: "assistant", content: assistantReply },
-  ].slice(-40);
+    { role: "assistant" as const, content: assistantReply },
+  ].slice(-40) as BrainstormTurn[];
   return { ...state, history: next };
 }
 

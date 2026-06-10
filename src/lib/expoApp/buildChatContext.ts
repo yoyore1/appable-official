@@ -10,11 +10,11 @@ export function appendBuildTurn(
   userMessage: string,
   assistantReply: string
 ): ProjectBuildState {
-  const next: BrainstormTurn[] = [
+  const next = [
     ...state.history,
-    { role: "user", content: userMessage },
-    { role: "assistant", content: assistantReply },
-  ].slice(-40);
+    { role: "user" as const, content: userMessage },
+    { role: "assistant" as const, content: assistantReply },
+  ].slice(-40) as BrainstormTurn[];
   return { ...state, history: next };
 }
 

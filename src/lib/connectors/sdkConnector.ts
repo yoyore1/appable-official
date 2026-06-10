@@ -54,7 +54,7 @@ export function linkSdkConnector(
 }
 
 export function sdkConnectorPublic(
-  connector: ProjectSdkConnector | null | undefined
+  connector: Pick<ProjectSdkConnector, "public"> | null | undefined
 ): SdkConnectorPublic | null {
   if (!connector || connector.public.status === "disconnected") return null;
   return connector.public;

@@ -154,7 +154,13 @@ export function compileTapCopyHandoff(
   const to = parseCoachReplacement(coachText);
   if (!tap?.from || !to) return null;
 
-  const path = resolvePathForTapEdit(model, appName, tap.from, tap.where, tap.path);
+  const path = resolvePathForTapEdit(
+    model,
+    appName,
+    tap.from,
+    tap.where ?? "preview",
+    tap.path
+  );
   if (!path) return null;
 
   const ticket: TapCopyTicket = {

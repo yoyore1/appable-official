@@ -11,6 +11,7 @@ import {
 import {
   getConnectorDefinition,
   isConnectorConnected,
+  type ConnectorRecommendation,
   type ProjectConnectorState,
 } from "@/lib/connectors/registry";
 import { getConnectorConnectionType } from "@/lib/connectors/sdkCatalog";

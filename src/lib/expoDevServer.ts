@@ -23,7 +23,7 @@ function lanIpv4(): string {
   for (const name of Object.keys(nets)) {
     for (const net of nets[name] ?? []) {
       const family = net.family;
-      if ((family === "IPv4" || family === 4) && !net.internal) return net.address;
+      if (String(family) === "IPv4" && !net.internal) return net.address;
     }
   }
   return "localhost";
